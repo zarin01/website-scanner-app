@@ -1,0 +1,204 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  DEVELOPER
+  CLIENT
+}
+
+enum ScanStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum UrlStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+enum FindingCategory {
+  WEBSITE_UPDATES
+  ADA
+  SPEED
+  SEO
+  SECURITY
+  TECHNICAL
+  OTHER
+}
+
+enum FindingSeverity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ReportAudience {
+  CLIENT
+  WEB_DEV
+}
+
+enum ReportFormat {
+  HTML
+  PDF
+  JSON
+}
+
+model Organization {
+  id        String    @id @default(cuid())
+  name      String
+  slug      String    @unique
+  users     User[]
+  clients   Client[]
+  projects  Project[]
+  scans     Scan[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model User {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String?
+  email          String       @unique
+  role           UserRole     @default(DEVELOPER)
+  scans          Scan[]       @relation("ScanCreatedBy")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+}
+
+model Client {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  contactName    String?
+  contactEmail   String?
+  projects       Project[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model Project {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  clientId       String?
+  client         Client?      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  name           String
+  rootUrl        String
+  scans          Scan[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([clientId])
+}
+
+model Scan {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  projectId      String?
+  project        Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdById    String?
+  createdBy      User?        @relation("ScanCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  status         ScanStatus   @default(QUEUED)
+  source         String       @default("manual")
+  requestedUrls  Json
+  config         Json?
+  summary        Json?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  urls           ScannedUrl[]
+  findings       Finding[]
+  reports        Report[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId, createdAt])
+  @@index([projectId])
+  @@index([status])
+}
+
+model ScannedUrl {
+  id            String    @id @default(cuid())
+  scanId        String
+  scan          Scan      @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  url           String
+  normalizedUrl String
+  finalUrl      String?
+  status        UrlStatus @default(QUEUED)
+  httpStatus    Int?
+  title         String?
+  screenshotKey String?
+  rawMetrics    Json?
+  error         String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  findings      Finding[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([scanId])
+  @@index([status])
+}
+
+model Finding {
+  id             String          @id @default(cuid())
+  scanId         String
+  scan           Scan            @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  scannedUrlId   String?
+  scannedUrl     ScannedUrl?     @relation(fields: [scannedUrlId], references: [id], onDelete: Cascade)
+  category       FindingCategory
+  severity       FindingSeverity @default(INFO)
+  title          String
+  description    String
+  impact         String?
+  recommendation String?
+  evidence       Json?
+  source         String
+  sortOrder      Int             @default(0)
+  createdAt      DateTime        @default(now())
+
+  @@index([scanId, category])
+  @@index([scannedUrlId])
+  @@index([severity])
+}
+
+model Report {
+  id         String         @id @default(cuid())
+  scanId     String
+  scan       Scan           @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  audience   ReportAudience @default(CLIENT)
+  format     ReportFormat   @default(HTML)
+  title      String
+  summary    String?
+  storageKey String?
+  content    Json?
+  createdAt  DateTime       @default(now())
+
+  @@index([scanId])
+  @@index([audience])
+}
