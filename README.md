@@ -12,12 +12,17 @@ SEO, needed-update, and technical issue reports.
 
 ## Local Setup
 
+This machine is using Homebrew Postgres on `localhost:5432`.
+
 ```bash
 npm install
-docker compose up -d
+brew services start postgresql@16
 npm run db:migrate -- --name init
 npm run dev
 ```
+
+Redis is optional until the worker is fully wired. Leave `REDIS_URL` blank to
+save scan records without queueing worker jobs.
 
 Run the scan worker in a second terminal:
 

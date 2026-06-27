@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db/prisma";
 import { hasDatabaseUrl } from "@/lib/env";
 import { getScanQueue } from "@/lib/jobs/queue";
+import { processScanInBackground } from "@/lib/scanners/runner";
 import type { ScanRequestInput } from "@/lib/validation/scan";
 
 const DEFAULT_ORGANIZATION = {
@@ -82,6 +83,8 @@ export async function createScanRequest(input: ScanRequestInput) {
       scanId: scan.id,
       urls: input.urls,
     });
+  } else {
+    processScanInBackground(scan.id);
   }
 
   return {

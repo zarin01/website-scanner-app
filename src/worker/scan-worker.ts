@@ -4,7 +4,7 @@ import {
   SCAN_QUEUE_NAME,
   type ScanJobData,
 } from "@/lib/jobs/queue";
-import { prisma } from "@/lib/db/prisma";
+import { processScan } from "@/lib/scanners/runner";
 
 const redisUrl = process.env.REDIS_URL;
 
@@ -15,25 +15,7 @@ if (!redisUrl) {
 const worker = new Worker<ScanJobData, void, "scan-url-list">(
   SCAN_QUEUE_NAME,
   async (job) => {
-    await prisma.scan.update({
-      where: { id: job.data.scanId },
-      data: {
-        status: "RUNNING",
-        startedAt: new Date(),
-      },
-    });
-
-    // Scanner adapters will be executed here in the next implementation pass.
-    await prisma.scan.update({
-      where: { id: job.data.scanId },
-      data: {
-        status: "COMPLETED",
-        finishedAt: new Date(),
-        summary: {
-          processedUrls: job.data.urls.length,
-        },
-      },
-    });
+    await processScan(job.data.scanId);
   },
   { connection: getRedisConnection() },
 );
