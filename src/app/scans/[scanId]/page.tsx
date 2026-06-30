@@ -20,6 +20,7 @@ export const dynamic = "force-dynamic";
 
 const categoryLabels = {
   WEBSITE_UPDATES: "Needed Website Updates",
+  FUNCTIONALITY: "Core Functionality",
   ADA: "ADA Report",
   SPEED: "Speed Report",
   SEO: "SEO Report",
@@ -62,6 +63,7 @@ const attentionConfig = {
 const attentionOrder = ["URGENT", "HIGH", "MEDIUM", "LOW"] as const;
 const categoryOrder = [
   "WEBSITE_UPDATES",
+  "FUNCTIONALITY",
   "ADA",
   "SPEED",
   "SEO",
@@ -76,6 +78,12 @@ const statusStyles = {
   COMPLETED: "border-emerald-300/25 bg-emerald-300/10 text-emerald-100",
   FAILED: "border-red-300/25 bg-red-300/10 text-red-100",
   CANCELLED: "border-slate-300/25 bg-slate-300/10 text-slate-100",
+};
+
+const platformStatusStyles = {
+  pass: "border-emerald-300/25 bg-emerald-300/10 text-emerald-50",
+  warn: "border-amber-300/25 bg-amber-300/10 text-amber-50",
+  fail: "border-red-300/25 bg-red-300/10 text-red-50",
 };
 
 type ReportFinding = {
@@ -102,6 +110,17 @@ type SavedReport = {
     }[];
   };
 };
+
+type PlatformStatus = "pass" | "warn" | "fail";
+
+type PlatformCard = {
+  title: string;
+  status: PlatformStatus;
+  label: string;
+  detail: string;
+};
+
+type PlatformSnapshot = PlatformCard[];
 
 export default async function ScanReportPage({
   params,
@@ -184,6 +203,7 @@ export default async function ScanReportPage({
     });
 
   const isProcessing = scan.status === "QUEUED" || scan.status === "RUNNING";
+  const platformSnapshot = getPlatformSnapshot(scan.findings);
 
   return (
     <main className="min-h-screen bg-[#070b10] text-slate-100">
@@ -224,7 +244,7 @@ export default async function ScanReportPage({
         </div>
       </section>
 
-      <section className="mx-auto grid w-full max-w-8xl gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[320px_1fr] lg:px-8">
+      <section className="mx-auto grid w-full max-w-8xl gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[280px_1fr] lg:px-8">
         <aside className="space-y-4">
           <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
             <h2 className="text-sm font-semibold text-white">Scanned URLs</h2>
@@ -271,6 +291,8 @@ export default async function ScanReportPage({
               </div>
             </div>
           ) : null}
+
+          <PlatformSnapshotCards snapshot={platformSnapshot} />
 
           {scan.findings.length === 0 ? (
             <div className="rounded-lg border border-white/10 bg-white/[0.04] p-5">
@@ -370,9 +392,9 @@ function SaveReportPanel({
             return (
               <div
                 key={report.id}
-                className="rounded-lg border border-white/10 bg-black/20 p-3"
+                className="rounded-lg border border-white/10 bg-black/20 p-1"
               >
-                <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start justify-between gap-1">
                   <div>
                     <div className="text-sm font-semibold text-white">
                       {formatDate(report.createdAt)}
@@ -395,6 +417,40 @@ function SaveReportPanel({
         )}
       </div>
     </div>
+  );
+}
+
+function PlatformSnapshotCards({ snapshot }: { snapshot: PlatformSnapshot }) {
+  if (snapshot.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="grid gap-3 md:grid-cols-3">
+      {snapshot.map((card) => (
+        <div
+          key={card.title}
+          className={`rounded-lg border p-4 ${platformStatusStyles[card.status]}`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide opacity-75">
+                {card.title}
+              </div>
+              <h2 className="mt-2 text-lg font-semibold text-white">{card.label}</h2>
+            </div>
+            <span className="rounded-full border border-current/25 px-2.5 py-1 text-xs font-semibold uppercase">
+              {card.status === "pass"
+                ? "Pass"
+                : card.status === "fail"
+                  ? "Update"
+                  : "Review"}
+            </span>
+          </div>
+          <p className="mt-3 text-sm leading-6 opacity-85">{card.detail}</p>
+        </div>
+      ))}
+    </section>
   );
 }
 
@@ -518,9 +574,9 @@ function WebsiteUpdatesSection({
           <EvidencePanel title="Examples From This Site">
             {evidence.examples.length > 0 ? (
               <div className="space-y-2">
-                {evidence.examples.slice(0, 10).map((example) => (
+                {evidence.examples.slice(0, 10).map((example, index) => (
                   <code
-                    key={example}
+                    key={`${example}-${index}`}
                     className="block overflow-hidden text-ellipsis rounded-md border border-white/10 bg-black/25 px-3 py-2 text-xs leading-5 text-cyan-100"
                   >
                     {example}
@@ -865,9 +921,9 @@ function EvidenceDetails({ finding }: { finding: ReportFinding }) {
 
       {counts.length > 0 ? (
         <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {counts.slice(0, 6).map((count) => (
+          {counts.slice(0, 6).map((count, index) => (
             <div
-              key={`${count.label}-${count.value}`}
+              key={`${count.label}-${count.value}-${index}`}
               className="rounded-lg border border-white/10 bg-white/[0.04] p-3"
             >
               <div className="text-lg font-semibold text-white">{count.value}</div>
@@ -879,9 +935,9 @@ function EvidenceDetails({ finding }: { finding: ReportFinding }) {
 
       {missingSecurityHeaders.length > 0 ? (
         <div className="mt-3 flex flex-wrap gap-2">
-          {missingSecurityHeaders.map((header) => (
+          {missingSecurityHeaders.map((header, index) => (
             <span
-              key={header}
+              key={`${header}-${index}`}
               className="rounded-full border border-orange-300/20 bg-orange-300/10 px-2.5 py-1 text-xs font-medium text-orange-100"
             >
               {header}
@@ -892,9 +948,9 @@ function EvidenceDetails({ finding }: { finding: ReportFinding }) {
 
       {examples.length > 0 ? (
         <div className="mt-3 space-y-2">
-          {examples.slice(0, 6).map((example) => (
+          {examples.slice(0, 6).map((example, index) => (
             <code
-              key={example}
+              key={`${example}-${index}`}
               className="block overflow-hidden text-ellipsis rounded-md border border-white/10 bg-[#070b10] px-3 py-2 text-xs leading-5 text-cyan-100"
             >
               {example}
@@ -1041,6 +1097,7 @@ function severityWeight(severity: ReportFinding["severity"]) {
 function getCategoryContext(category: keyof typeof categoryLabels) {
   const contexts = {
     WEBSITE_UPDATES: "Maintenance",
+    FUNCTIONALITY: "Forms, email, and client actions",
     ADA: "Accessibility",
     SPEED: "Performance",
     SEO: "Search visibility",
@@ -1062,6 +1119,8 @@ function getCategorySummary(
   const summaries = {
     WEBSITE_UPDATES:
       "Maintenance clues from public source, headers, and CMS asset paths.",
+    FUNCTIONALITY:
+      "Public checks for contact forms, email DNS readiness, mail links, broken CTAs, and common client-action issues.",
     ADA: "Accessibility issues and baseline checks that can affect visitors using assistive technology.",
     SPEED:
       "Performance signals from visible page weight, scripts, styles, and image usage.",
@@ -1130,6 +1189,86 @@ function getSavedReportMeta(content: unknown) {
   return {
     overallScore,
     website: typeof website === "string" ? website : undefined,
+  };
+}
+
+function getPlatformSnapshot(findings: ReportFinding[]): PlatformSnapshot {
+  const snapshotFinding = findings.find((finding) => {
+    if (!isRecord(finding.evidence)) {
+      return false;
+    }
+
+    return isRecord(finding.evidence.platformSummary);
+  });
+
+  if (!snapshotFinding || !isRecord(snapshotFinding.evidence)) {
+    return [];
+  }
+
+  const platformSummary = snapshotFinding.evidence.platformSummary;
+
+  if (!isRecord(platformSummary)) {
+    return [];
+  }
+
+  return [
+    getPlatformCard(
+      "PHP Version",
+      platformSummary.php,
+      "PHP hidden",
+      "Confirm PHP version in hosting.",
+    ),
+    getPlatformCard(
+      "WordPress Version",
+      platformSummary.wordpress,
+      "WP version hidden",
+      "Confirm WordPress version in wp-admin.",
+    ),
+    getPlatformCard(
+      "Plugin Updates",
+      platformSummary.plugins,
+      "Plugin versions hidden",
+      "Confirm active plugin update notices in wp-admin.",
+    ),
+  ].filter((card): card is PlatformCard => Boolean(card));
+}
+
+function getPlatformCard(
+  title: string,
+  value: unknown,
+  fallbackLabel: string,
+  fallbackDetail: string,
+): PlatformCard | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const status = value.status;
+  const label = value.label;
+  const detail = value.detail;
+  const version = value.version;
+  const latestVersion = value.latestVersion;
+  const checkedCount = value.checkedCount;
+  const outdatedCount = value.outdatedCount;
+  const hasConcreteVersion =
+    typeof version === "string" || typeof latestVersion === "string";
+  const hasPluginCheck =
+    typeof checkedCount === "number" && checkedCount > 0;
+  const hasOutdatedPlugins =
+    typeof outdatedCount === "number" && outdatedCount > 0;
+
+  if (!hasConcreteVersion && !hasPluginCheck && !hasOutdatedPlugins) {
+    return null;
+  }
+
+  return {
+    title,
+    status:
+      status === "pass" || status === "warn" || status === "fail"
+        ? status
+        : "warn",
+    label: typeof label === "string" ? label : fallbackLabel,
+    detail: typeof detail === "string" ? detail : fallbackDetail,
   };
 }
 

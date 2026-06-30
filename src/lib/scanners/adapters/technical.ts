@@ -2,6 +2,7 @@ import type { ScannerAdapter, ScannerFinding } from "@/lib/scanners/types";
 
 const PAGE_TIMEOUT_MS = 15000;
 const SUPPORT_TIMEOUT_MS = 7000;
+const WORDPRESS_API_TIMEOUT_MS = 7000;
 
 export const technicalScanner: ScannerAdapter = {
   name: "technical-baseline",
@@ -36,6 +37,9 @@ export const technicalScanner: ScannerAdapter = {
     const themeAssets = extractWordPressAssets(html, "themes");
     const pluginSlugs = uniqueValues(pluginAssets.map((asset) => asset.slug));
     const themeSlugs = uniqueValues(themeAssets.map((asset) => asset.slug));
+    const exposedWordPressVersion = generator?.match(/wordpress\s+([0-9.]+)/i)?.[1];
+    const exposedPhpVersion = getPhpVersion(poweredBy);
+    const pluginVersionSignals = getPluginVersionSignals(pluginAssets);
     const missingAltImages = imageTags.filter(hasMissingImageAlt);
     const missingAltCount = missingAltImages.length;
     const lazyImageCount = imageTags.filter((tag) =>
@@ -57,7 +61,53 @@ export const technicalScanner: ScannerAdapter = {
     const assetCount = imageTags.length + scriptTags.length + stylesheetTags.length;
     const htmlSizeKb = Math.round(Buffer.byteLength(html, "utf8") / 1024);
     const domNodeCount = html.match(/<[a-z][\w:-]*(?:\s|>)/gi)?.length ?? 0;
-    const supportFiles = await getSupportFileSignals(origin);
+    const [supportFiles, latestWordPressVersion, pluginUpdateSignals] =
+      await Promise.all([
+        getSupportFileSignals(origin),
+        exposedWordPressVersion ? getLatestWordPressVersion() : Promise.resolve(undefined),
+        getPluginUpdateSignals(pluginVersionSignals.slice(0, 8)),
+      ]);
+
+    const platformSummary = getPlatformSummary({
+      exposedPhpVersion,
+      exposedWordPressVersion,
+      latestWordPressVersion,
+      pluginSlugs,
+      pluginUpdateSignals,
+    });
+
+    findings.push({
+      category: "WEBSITE_UPDATES",
+      severity: platformSummary.severity,
+      title: "Platform update snapshot",
+      description:
+        "Public platform signals were checked for PHP, WordPress core, and visible plugin version clues.",
+      impact:
+        "Outdated PHP, WordPress core, or plugins can create security, compatibility, and performance risk.",
+      recommendation:
+        "Confirm these items in hosting and wp-admin before quoting or completing maintenance updates.",
+      evidence: {
+        platformSummary,
+        php: platformSummary.php,
+        wordpress: platformSummary.wordpress,
+        plugins: platformSummary.plugins,
+        counts: [
+          { label: "Visible plugins checked", value: pluginUpdateSignals.length },
+          {
+            label: "Outdated visible plugins",
+            value: pluginUpdateSignals.filter((plugin) => plugin.status === "fail").length,
+          },
+        ],
+        examples: [
+          platformSummary.php.detail,
+          platformSummary.wordpress.detail,
+          ...pluginUpdateSignals
+            .filter(isOutdatedPlugin)
+            .map((plugin) => `${plugin.slug}: visible ${plugin.detectedVersion}, latest ${plugin.latestVersion}`),
+        ],
+      },
+      source: "technical-baseline",
+    });
 
     if (!response.ok) {
       findings.push({
@@ -119,22 +169,59 @@ export const technicalScanner: ScannerAdapter = {
     }
 
     if (generator?.toLowerCase().includes("wordpress")) {
-      const version = generator.match(/wordpress\s+([0-9.]+)/i)?.[1];
+      if (exposedWordPressVersion) {
+        const isOutdated =
+          latestWordPressVersion &&
+          compareVersions(exposedWordPressVersion, latestWordPressVersion) < 0;
 
-      if (version) {
         findings.push({
           category: "WEBSITE_UPDATES",
-          severity: "MEDIUM",
+        severity: isOutdated ? "HIGH" : "MEDIUM",
           title: "WordPress version is exposed",
-          description: `The page source exposes WordPress ${version}.`,
+          description: `The page source exposes WordPress ${exposedWordPressVersion}.`,
           impact:
             "Public version clues can make security review easier for attackers and help identify update risk.",
           recommendation:
-            "Confirm core is current and consider removing public generator/version output.",
-        evidence: { generator, examples: [generator] },
+            isOutdated
+              ? `Update WordPress core after backups and staging review. Latest detected WordPress release is ${latestWordPressVersion}.`
+              : "Confirm core is current and consider removing public generator/version output.",
+        evidence: {
+          generator,
+          detectedVersion: exposedWordPressVersion,
+          latestVersion: latestWordPressVersion,
+          examples: [generator],
+        },
           source: "technical-baseline",
         });
       }
+    }
+
+    const outdatedPlugins = pluginUpdateSignals.filter(isOutdatedPlugin);
+
+    if (outdatedPlugins.length > 0) {
+      findings.push({
+        category: "WEBSITE_UPDATES",
+        severity: outdatedPlugins.some((plugin) => plugin.severity === "HIGH")
+          ? "HIGH"
+          : "MEDIUM",
+        title: "Visible plugin versions may be outdated",
+        description: `${outdatedPlugins.length} visible plugin version${outdatedPlugins.length === 1 ? "" : "s"} appear older than WordPress.org's current plugin version.`,
+        impact:
+          "Outdated plugins are one of the most common WordPress security and compatibility risks.",
+        recommendation:
+          "Confirm active plugin versions in wp-admin, test updates in staging, and replace abandoned plugins.",
+        evidence: {
+          outdatedPlugins,
+          counts: [
+            { label: "Outdated visible plugins", value: outdatedPlugins.length },
+            { label: "Visible plugins checked", value: pluginUpdateSignals.length },
+          ],
+          examples: outdatedPlugins
+            .slice(0, 8)
+            .map((plugin) => `${plugin.slug}: visible ${plugin.detectedVersion}, latest ${plugin.latestVersion}`),
+        },
+        source: "technical-baseline",
+      });
     }
 
     if (pluginSlugs.length > 0) {
@@ -625,6 +712,7 @@ function extractWordPressAssets(html: string, type: "plugins" | "themes") {
       return {
         slug,
         path: `/wp-content/${type}/${slug}${suffix}`.slice(0, 180),
+        version: getAssetVersion(suffix),
       };
     })
     .filter((asset) => /^[a-z0-9._-]+$/.test(asset.slug))
@@ -633,6 +721,288 @@ function extractWordPressAssets(html: string, type: "plugins" | "themes") {
         allAssets.findIndex((candidate) => candidate.path === asset.path) === index,
     )
     .slice(0, 30);
+}
+
+function getAssetVersion(value: string) {
+  const version = value.match(/[?&]ver=([^&#"'\s]+)/i)?.[1];
+
+  return version ? decodeURIComponent(version).replace(/[^0-9A-Za-z._-]/g, "") : undefined;
+}
+
+function getPhpVersion(poweredBy: string | null) {
+  return poweredBy?.match(/php\/?\s*([0-9]+(?:\.[0-9]+){1,2})/i)?.[1];
+}
+
+function getPluginVersionSignals(
+  assets: ReturnType<typeof extractWordPressAssets>,
+) {
+  const bySlug = new Map<string, { slug: string; detectedVersion: string; example: string }>();
+
+  assets.forEach((asset) => {
+    if (!asset.version || bySlug.has(asset.slug) || !/^\d+(?:\.\d+){0,3}/.test(asset.version)) {
+      return;
+    }
+
+    bySlug.set(asset.slug, {
+      slug: asset.slug,
+      detectedVersion: asset.version,
+      example: asset.path,
+    });
+  });
+
+  return Array.from(bySlug.values());
+}
+
+async function getLatestWordPressVersion() {
+  try {
+    const response = await fetch("https://api.wordpress.org/core/version-check/1.7/", {
+      signal: AbortSignal.timeout(WORDPRESS_API_TIMEOUT_MS),
+      headers: { "user-agent": "WebsiteScannerBot/0.1" },
+    });
+
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const data = (await response.json()) as {
+      offers?: { current?: string; response?: string }[];
+    };
+
+    return data.offers?.find((offer) => offer.response === "upgrade")?.current;
+  } catch {
+    return undefined;
+  }
+}
+
+async function getPluginUpdateSignals(
+  plugins: { slug: string; detectedVersion: string; example: string }[],
+) {
+  const results = await Promise.all(
+    plugins.map(async (plugin) => {
+      const latestVersion = await getLatestPluginVersion(plugin.slug);
+
+      if (!latestVersion) {
+        return {
+          ...plugin,
+          status: "unknown" as const,
+          detail: "Latest version could not be confirmed from WordPress.org.",
+        };
+      }
+
+      const comparison = compareVersions(plugin.detectedVersion, latestVersion);
+
+      return {
+        ...plugin,
+        latestVersion,
+        status: comparison < 0 ? ("fail" as const) : ("pass" as const),
+        severity: getVersionGapSeverity(plugin.detectedVersion, latestVersion),
+        detail:
+          comparison < 0
+            ? `${plugin.slug} appears outdated: visible ${plugin.detectedVersion}, latest ${latestVersion}.`
+            : `${plugin.slug} visible version ${plugin.detectedVersion} matches or exceeds WordPress.org ${latestVersion}.`,
+      };
+    }),
+  );
+
+  return results;
+}
+
+async function getLatestPluginVersion(slug: string) {
+  try {
+    const params = new URLSearchParams({
+      action: "plugin_information",
+      "request[slug]": slug,
+      "request[fields][version]": "1",
+      "request[fields][sections]": "0",
+    });
+    const response = await fetch(`https://api.wordpress.org/plugins/info/1.2/?${params}`, {
+      signal: AbortSignal.timeout(WORDPRESS_API_TIMEOUT_MS),
+      headers: { "user-agent": "WebsiteScannerBot/0.1" },
+    });
+
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const data = (await response.json()) as { version?: string };
+
+    return data.version;
+  } catch {
+    return undefined;
+  }
+}
+
+function getPlatformSummary({
+  exposedPhpVersion,
+  exposedWordPressVersion,
+  latestWordPressVersion,
+  pluginSlugs,
+  pluginUpdateSignals,
+}: {
+  exposedPhpVersion?: string;
+  exposedWordPressVersion?: string;
+  latestWordPressVersion?: string;
+  pluginSlugs: string[];
+  pluginUpdateSignals: Awaited<ReturnType<typeof getPluginUpdateSignals>>;
+}) {
+  const php = getPhpStatus(exposedPhpVersion);
+  const wordpress = getWordPressStatus(exposedWordPressVersion, latestWordPressVersion);
+  const plugins = getPluginsStatus(pluginSlugs, pluginUpdateSignals);
+  const statuses = [php.status, wordpress.status, plugins.status];
+  const severity: ScannerFinding["severity"] = statuses.includes("fail")
+    ? "HIGH"
+    : statuses.includes("warn")
+      ? "MEDIUM"
+      : "INFO";
+
+  return { php, wordpress, plugins, severity };
+}
+
+function isOutdatedPlugin(
+  plugin: Awaited<ReturnType<typeof getPluginUpdateSignals>>[number],
+): plugin is {
+  slug: string;
+  detectedVersion: string;
+  example: string;
+  detail: string;
+  latestVersion: string;
+  severity: ScannerFinding["severity"];
+  status: "fail";
+} {
+  return plugin.status === "fail";
+}
+
+function getPhpStatus(version?: string) {
+  if (!version) {
+    return {
+      status: "warn" as const,
+      label: "PHP hidden",
+      detail: "PHP version is not publicly visible. Confirm in hosting.",
+      version: null,
+    };
+  }
+
+  const [major = 0, minor = 0] = version.split(".").map(Number);
+  const status = major < 8 || (major === 8 && minor < 2)
+    ? "fail"
+    : major === 8 && minor === 2
+      ? "warn"
+      : "pass";
+
+  return {
+    status,
+    label:
+      status === "pass"
+        ? "PHP looks current"
+        : status === "warn"
+          ? "PHP security-only"
+          : "PHP update needed",
+    detail:
+      status === "pass"
+        ? `PHP ${version} is within the current supported baseline.`
+        : status === "warn"
+          ? `PHP ${version} is older and should be planned for update.`
+          : `PHP ${version} is outdated and should be upgraded.`,
+    version,
+  };
+}
+
+function getWordPressStatus(version?: string, latestVersion?: string) {
+  if (!version) {
+    return {
+      status: "warn" as const,
+      label: "WP version hidden",
+      detail: "WordPress version is not publicly visible. Confirm in wp-admin.",
+      version: null,
+      latestVersion: latestVersion ?? null,
+    };
+  }
+
+  if (!latestVersion) {
+    return {
+      status: "warn" as const,
+      label: "WP latest unknown",
+      detail: `WordPress ${version} is visible, but the latest version could not be checked.`,
+      version,
+      latestVersion: null,
+    };
+  }
+
+  const outdated = compareVersions(version, latestVersion) < 0;
+
+  return {
+    status: outdated ? ("fail" as const) : ("pass" as const),
+    label: outdated ? "WP update needed" : "WP looks current",
+    detail: outdated
+      ? `WordPress ${version} is visible; latest is ${latestVersion}.`
+      : `WordPress ${version} matches the latest detected release.`,
+    version,
+    latestVersion,
+  };
+}
+
+function getPluginsStatus(
+  pluginSlugs: string[],
+  pluginUpdateSignals: Awaited<ReturnType<typeof getPluginUpdateSignals>>,
+) {
+  const outdated = pluginUpdateSignals.filter((plugin) => plugin.status === "fail");
+
+  if (outdated.length > 0) {
+    return {
+      status: "fail" as const,
+      label: "Plugin updates found",
+      detail: `${outdated.length} visible plugin version${outdated.length === 1 ? "" : "s"} appear outdated.`,
+      checkedCount: pluginUpdateSignals.length,
+      outdatedCount: outdated.length,
+    };
+  }
+
+  if (pluginUpdateSignals.length > 0) {
+    return {
+      status: "pass" as const,
+      label: "Visible plugins pass",
+      detail: `${pluginUpdateSignals.length} visible plugin version${pluginUpdateSignals.length === 1 ? "" : "s"} checked against WordPress.org.`,
+      checkedCount: pluginUpdateSignals.length,
+      outdatedCount: 0,
+    };
+  }
+
+  return {
+    status: "warn" as const,
+    label: pluginSlugs.length > 0 ? "Plugin versions hidden" : "No plugin versions",
+    detail:
+      pluginSlugs.length > 0
+        ? `${pluginSlugs.length} plugin footprint${pluginSlugs.length === 1 ? "" : "s"} found, but public version numbers were not reliable enough to compare.`
+        : "No WordPress plugin footprints were visible on this page.",
+    checkedCount: 0,
+    outdatedCount: 0,
+  };
+}
+
+function compareVersions(first: string, second: string) {
+  const firstParts = first.split(/[.-]/).map((part) => Number.parseInt(part, 10) || 0);
+  const secondParts = second.split(/[.-]/).map((part) => Number.parseInt(part, 10) || 0);
+  const maxLength = Math.max(firstParts.length, secondParts.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const difference = (firstParts[index] ?? 0) - (secondParts[index] ?? 0);
+
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+
+  return 0;
+}
+
+function getVersionGapSeverity(
+  detectedVersion: string,
+  latestVersion: string,
+): ScannerFinding["severity"] {
+  const detectedMajor = Number.parseInt(detectedVersion.split(".")[0] ?? "0", 10);
+  const latestMajor = Number.parseInt(latestVersion.split(".")[0] ?? "0", 10);
+
+  return detectedMajor < latestMajor ? "HIGH" : "MEDIUM";
 }
 
 function hasMissingImageAlt(tag: string) {

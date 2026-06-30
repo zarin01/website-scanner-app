@@ -1,5 +1,9 @@
 import { Prisma } from "@/generated/prisma/client";
+import { FindingCategory, FindingSeverity } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/db/prisma";
+import { functionalityScanner } from "@/lib/scanners/adapters/functionality";
+import { lighthouseScanner } from "@/lib/scanners/adapters/lighthouse";
+import { reputationScanner } from "@/lib/scanners/adapters/reputation";
 import { technicalScanner } from "@/lib/scanners/adapters/technical";
 import { waveAccessibilityScanner } from "@/lib/scanners/adapters/wave";
 import type { ScannerFinding } from "@/lib/scanners/types";
@@ -52,17 +56,22 @@ export async function processScan(scanId: string) {
         maxPages: config.maxPages ?? 25,
         includeSubpages: config.includeSubpages ?? false,
       };
+      const scanners = [
+        technicalScanner,
+        functionalityScanner,
+        waveAccessibilityScanner,
+        lighthouseScanner,
+        reputationScanner,
+      ];
       const scannerResults = await Promise.allSettled(
-        [technicalScanner, waveAccessibilityScanner].map((scanner) =>
-          scanner.run(scannerContext),
-        ),
+        scanners.map((scanner) => scanner.run(scannerContext)),
       );
       const findings = scannerResults.flatMap((result, index) => {
         if (result.status === "fulfilled") {
           return result.value;
         }
 
-        const scannerName = [technicalScanner, waveAccessibilityScanner][index].name;
+        const scannerName = scanners[index].name;
 
         return [
           {
@@ -106,8 +115,8 @@ export async function processScan(scanId: string) {
         data: normalizedFindings.map((finding, index) => ({
           scanId,
           scannedUrlId: scannedUrl.id,
-          category: finding.category,
-          severity: finding.severity,
+          category: normalizeFindingCategory(finding.category),
+          severity: normalizeFindingSeverity(finding.severity),
           title: finding.title,
           description: finding.description,
           impact: finding.impact,
@@ -195,4 +204,20 @@ export function processScanInBackground(scanId: string) {
       })
       .catch(() => undefined);
   });
+}
+
+function normalizeFindingCategory(category: string) {
+  const categories = Object.values(FindingCategory);
+
+  return categories.includes(category as (typeof categories)[number])
+    ? (category as (typeof categories)[number])
+    : FindingCategory.TECHNICAL;
+}
+
+function normalizeFindingSeverity(severity: string) {
+  const severities = Object.values(FindingSeverity);
+
+  return severities.includes(severity as (typeof severities)[number])
+    ? (severity as (typeof severities)[number])
+    : FindingSeverity.INFO;
 }
