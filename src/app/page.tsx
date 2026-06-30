@@ -20,7 +20,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-[#070b10] text-slate-100">
       <section className="border-b border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.16),transparent_32rem),linear-gradient(180deg,#0b1118_0%,#070b10_100%)]">
-        <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-4 px-4 py-5 sm:px-6 lg:px-8">
+        <div className="mx-auto flex w-full max-w-8xl items-center justify-between gap-4 px-4 py-5 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-emerald-400/25 bg-emerald-400/10 text-emerald-300">
               <ClipboardList className="h-5 w-5" />
@@ -36,7 +36,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="mx-auto grid w-full max-w-7xl gap-6 px-4 pb-8 pt-4 sm:px-6 lg:grid-cols-[minmax(0,1fr)_390px] lg:px-8 lg:pb-10 lg:pt-6">
+        <div className="mx-auto grid w-full max-w-8xl gap-6 px-4 pb-8 pt-4 sm:px-6 lg:grid-cols-[minmax(0,1fr)_390px] lg:px-8 lg:pb-10 lg:pt-6">
           <div className="w-full">
             <ScanLauncher />
           </div>

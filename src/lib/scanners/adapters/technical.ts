@@ -32,20 +32,31 @@ export const technicalScanner: ScannerAdapter = {
       html.match(/<link\b[^>]*rel=["'][^"']*stylesheet[^"']*["'][^>]*>/gi) ??
       [];
     const h1Tags = html.match(/<h1\b[^>]*>[\s\S]*?<\/h1>/gi) ?? [];
-    const pluginSlugs = uniqueMatches(html, /\/wp-content\/plugins\/([^/"'?]+)/gi);
-    const themeSlugs = uniqueMatches(html, /\/wp-content\/themes\/([^/"'?]+)/gi);
-    const missingAltCount = imageTags.filter(hasMissingImageAlt).length;
+    const pluginAssets = extractWordPressAssets(html, "plugins");
+    const themeAssets = extractWordPressAssets(html, "themes");
+    const pluginSlugs = uniqueValues(pluginAssets.map((asset) => asset.slug));
+    const themeSlugs = uniqueValues(themeAssets.map((asset) => asset.slug));
+    const missingAltImages = imageTags.filter(hasMissingImageAlt);
+    const missingAltCount = missingAltImages.length;
     const lazyImageCount = imageTags.filter((tag) =>
       /\sloading\s*=\s*["']lazy["']/i.test(tag),
     ).length;
+    const nonLazyImages = imageTags.filter(
+      (tag) => !/\sloading\s*=\s*["']lazy["']/i.test(tag),
+    );
     const formControlTags =
       html.match(/<(input|textarea|select)\b[^>]*>/gi) ?? [];
-    const missingLabelCount = formControlTags.filter((tag) =>
+    const missingLabelControls = formControlTags.filter((tag) =>
       hasMissingFormLabel(tag, html),
-    ).length;
-    const emptyLinkCount = countEmptyLinks(html);
+    );
+    const missingLabelCount = missingLabelControls.length;
+    const emptyLinkExamples = getEmptyLinkExamples(html);
+    const emptyLinkCount = emptyLinkExamples.length;
+    const mixedContentExamples = getMixedContentExamples(html);
     const missingSecurityHeaders = getMissingSecurityHeaders(response, parsedUrl);
     const assetCount = imageTags.length + scriptTags.length + stylesheetTags.length;
+    const htmlSizeKb = Math.round(Buffer.byteLength(html, "utf8") / 1024);
+    const domNodeCount = html.match(/<[a-z][\w:-]*(?:\s|>)/gi)?.length ?? 0;
     const supportFiles = await getSupportFileSignals(origin);
 
     if (!response.ok) {
@@ -70,12 +81,14 @@ export const technicalScanner: ScannerAdapter = {
         "This confirms the scanner can reach the page and gives developers the final resolved URL.",
       recommendation:
         "Review the final URL, redirects, and status code before deeper remediation work.",
-      evidence: {
-        status: response.status,
-        finalUrl,
-        server,
-        poweredBy,
-      },
+        evidence: {
+          status: response.status,
+          finalUrl,
+          server,
+          poweredBy,
+          htmlSizeKb,
+          domNodeCount,
+        },
       source: "technical-baseline",
     });
 
@@ -88,7 +101,19 @@ export const technicalScanner: ScannerAdapter = {
         impact: "WordPress sites need routine core, plugin, theme, PHP, and security reviews.",
         recommendation:
           "Confirm WordPress core, plugins, active theme, PHP, and backups are current.",
-        evidence: { server, poweredBy },
+        evidence: {
+          server,
+          poweredBy,
+          generator,
+          examples: [
+            ...pluginAssets.slice(0, 2).map((asset) => asset.path),
+            ...themeAssets.slice(0, 2).map((asset) => asset.path),
+          ],
+          remoteLimits: [
+            "PHP version is usually hidden from public scans.",
+            "Exact WordPress/plugin/theme versions require wp-admin, hosting, or authenticated checks unless exposed in source.",
+          ],
+        },
         source: "technical-baseline",
       });
     }
@@ -106,7 +131,7 @@ export const technicalScanner: ScannerAdapter = {
             "Public version clues can make security review easier for attackers and help identify update risk.",
           recommendation:
             "Confirm core is current and consider removing public generator/version output.",
-          evidence: { generator },
+        evidence: { generator, examples: [generator] },
           source: "technical-baseline",
         });
       }
@@ -122,7 +147,12 @@ export const technicalScanner: ScannerAdapter = {
           "Visible plugin footprints help developers audit likely maintenance and update areas.",
         recommendation:
           "Review active plugins, remove unused plugins, and confirm all visible plugins are current.",
-        evidence: { plugins: pluginSlugs.slice(0, 20) },
+        evidence: {
+          plugins: pluginSlugs.slice(0, 20),
+          examples: pluginAssets.slice(0, 8).map((asset) => asset.path),
+          updateCheck:
+            "Compare these visible plugin names against the active plugin list in wp-admin.",
+        },
         source: "technical-baseline",
       });
     }
@@ -137,7 +167,12 @@ export const technicalScanner: ScannerAdapter = {
           "Theme clues help developers find where template-level ADA, SEO, and speed fixes may belong.",
         recommendation:
           "Confirm the active theme is maintained and child-theme changes are tracked.",
-        evidence: { themes: themeSlugs.slice(0, 10) },
+        evidence: {
+          themes: themeSlugs.slice(0, 10),
+          examples: themeAssets.slice(0, 8).map((asset) => asset.path),
+          updateCheck:
+            "Confirm the active theme and child theme are current and tracked in version control.",
+        },
         source: "technical-baseline",
       });
     }
@@ -162,7 +197,7 @@ export const technicalScanner: ScannerAdapter = {
           "Titles that are too short can be vague; titles that are too long may be truncated in search results.",
         recommendation:
           "Use a descriptive title that fits the page intent, usually around 35-60 characters.",
-        evidence: { title, length: title.length },
+        evidence: { title, length: title.length, examples: [title] },
         source: "technical-baseline",
       });
     }
@@ -187,7 +222,11 @@ export const technicalScanner: ScannerAdapter = {
           "Weak or truncated descriptions can reduce click-through from search results.",
         recommendation:
           "Use a clear page-specific description, usually around 120-155 characters.",
-        evidence: { length: metaDescription.length },
+        evidence: {
+          length: metaDescription.length,
+          metaDescription,
+          examples: [metaDescription],
+        },
         source: "technical-baseline",
       });
     }
@@ -212,7 +251,10 @@ export const technicalScanner: ScannerAdapter = {
         impact:
           "Multiple H1 headings can blur page hierarchy and make content harder to scan.",
         recommendation: "Use one main H1, then H2/H3 headings for supporting sections.",
-        evidence: { count: h1Tags.length },
+        evidence: {
+          count: h1Tags.length,
+          examples: h1Tags.slice(0, 5).map(summarizeHtml),
+        },
         source: "technical-baseline",
       });
     }
@@ -239,7 +281,7 @@ export const technicalScanner: ScannerAdapter = {
         impact: "Search engines may avoid indexing this page.",
         recommendation:
           "Confirm noindex is intentional. Remove it from pages that should rank.",
-        evidence: { robotsMeta },
+        evidence: { robotsMeta, examples: [robotsMeta] },
         source: "technical-baseline",
       });
     }
@@ -297,7 +339,15 @@ export const technicalScanner: ScannerAdapter = {
           "Visitors using screen readers may miss important visual content.",
         recommendation:
           "Add meaningful alt text for content images and empty alt text for decorative images.",
-        evidence: { missingAltCount, imageCount: imageTags.length },
+        evidence: {
+          missingAltCount,
+          imageCount: imageTags.length,
+          examples: missingAltImages.slice(0, 8).map(summarizeHtml),
+          counts: [
+            { label: "Images missing alt text", value: missingAltCount },
+            { label: "Total images checked", value: imageTags.length },
+          ],
+        },
         source: "technical-baseline",
       });
     }
@@ -312,7 +362,11 @@ export const technicalScanner: ScannerAdapter = {
           "Unlabeled form controls are difficult for screen reader and keyboard users.",
         recommendation:
           "Connect each form field to a visible label or accessible aria-label.",
-        evidence: { missingLabelCount },
+        evidence: {
+          missingLabelCount,
+          examples: missingLabelControls.slice(0, 8).map(summarizeHtml),
+          counts: [{ label: "Controls missing labels", value: missingLabelCount }],
+        },
         source: "technical-baseline",
       });
     }
@@ -327,7 +381,11 @@ export const technicalScanner: ScannerAdapter = {
           "Screen reader users may hear unclear links with no purpose or context.",
         recommendation:
           "Add visible link text or aria-labels that explain each link destination.",
-        evidence: { emptyLinkCount },
+        evidence: {
+          emptyLinkCount,
+          examples: emptyLinkExamples.slice(0, 8),
+          counts: [{ label: "Links without accessible text", value: emptyLinkCount }],
+        },
         source: "technical-baseline",
       });
     }
@@ -357,21 +415,31 @@ export const technicalScanner: ScannerAdapter = {
           "Security headers reduce common browser-side risks and improve baseline hardening.",
         recommendation:
           "Add appropriate security headers through hosting, CDN, or application middleware.",
-        evidence: { missingSecurityHeaders },
+        evidence: {
+          missingSecurityHeaders,
+          counts: [{ label: "Missing security headers", value: missingSecurityHeaders.length }],
+          examples: missingSecurityHeaders.map((header) => `Missing: ${header}`),
+          presentHeaders: getPresentSecurityHeaders(response, parsedUrl),
+        },
         source: "technical-baseline",
       });
     }
 
-    if (parsedUrl.protocol === "https:" && /(?:src|href)=["']http:\/\//i.test(html)) {
+    if (parsedUrl.protocol === "https:" && mixedContentExamples.length > 0) {
       findings.push({
         category: "SECURITY",
         severity: "MEDIUM",
         title: "Possible mixed content found",
-        description: "The HTTPS page includes one or more HTTP asset/link references.",
+        description: `The HTTPS page includes ${mixedContentExamples.length} HTTP asset/link reference${mixedContentExamples.length === 1 ? "" : "s"}.`,
         impact:
           "Mixed content can cause browser warnings, blocked assets, or weaker trust signals.",
         recommendation:
           "Update asset and link references to HTTPS or protocol-relative URLs.",
+        evidence: {
+          mixedContentCount: mixedContentExamples.length,
+          examples: mixedContentExamples.slice(0, 8),
+          counts: [{ label: "HTTP references on HTTPS page", value: mixedContentExamples.length }],
+        },
         source: "technical-baseline",
       });
     }
@@ -390,6 +458,20 @@ export const technicalScanner: ScannerAdapter = {
           imageCount: imageTags.length,
           scriptCount: scriptTags.length,
           stylesheetCount: stylesheetTags.length,
+          assetCount,
+          htmlSizeKb,
+          domNodeCount,
+          counts: [
+            { label: "Images", value: imageTags.length },
+            { label: "Scripts", value: scriptTags.length },
+            { label: "Stylesheets", value: stylesheetTags.length },
+            { label: "Estimated HTML KB", value: htmlSizeKb },
+          ],
+          examples: [
+            ...imageTags.slice(0, 3).map(summarizeHtml),
+            ...scriptTags.slice(0, 3).map(summarizeHtml),
+            ...stylesheetTags.slice(0, 3).map(summarizeHtml),
+          ],
         },
         source: "technical-baseline",
       });
@@ -408,6 +490,20 @@ export const technicalScanner: ScannerAdapter = {
           scriptCount: scriptTags.length,
           stylesheetCount: stylesheetTags.length,
           lazyImageCount,
+          assetCount,
+          htmlSizeKb,
+          domNodeCount,
+          counts: [
+            { label: "Images", value: imageTags.length },
+            { label: "Scripts", value: scriptTags.length },
+            { label: "Stylesheets", value: stylesheetTags.length },
+            { label: "Lazy-loaded images", value: lazyImageCount },
+          ],
+          examples: [
+            ...imageTags.slice(0, 3).map(summarizeHtml),
+            ...scriptTags.slice(0, 3).map(summarizeHtml),
+            ...stylesheetTags.slice(0, 3).map(summarizeHtml),
+          ],
         },
         source: "technical-baseline",
       });
@@ -424,7 +520,37 @@ export const technicalScanner: ScannerAdapter = {
           "Lazy loading can reduce initial page weight and improve perceived speed.",
         recommendation:
           "Lazy-load below-the-fold images while keeping important hero images eager.",
-        evidence: { imageCount: imageTags.length, lazyImageCount },
+        evidence: {
+          imageCount: imageTags.length,
+          lazyImageCount,
+          examples: nonLazyImages.slice(0, 8).map(summarizeHtml),
+          counts: [
+            { label: "Images without lazy loading", value: nonLazyImages.length },
+            { label: "Total images checked", value: imageTags.length },
+          ],
+        },
+        source: "technical-baseline",
+      });
+    }
+
+    if (htmlSizeKb > 500 || domNodeCount > 1500) {
+      findings.push({
+        category: "SPEED",
+        severity: htmlSizeKb > 1000 || domNodeCount > 2500 ? "HIGH" : "MEDIUM",
+        title: "Page markup may be heavy",
+        description: `The page source is about ${htmlSizeKb} KB and contains roughly ${domNodeCount} HTML nodes.`,
+        impact:
+          "Heavy markup can slow browser parsing, increase memory use, and make template updates harder.",
+        recommendation:
+          "Review page builder output, unused sections, duplicated markup, and large inline scripts/styles.",
+        evidence: {
+          htmlSizeKb,
+          domNodeCount,
+          counts: [
+            { label: "Estimated HTML KB", value: htmlSizeKb },
+            { label: "Approximate HTML nodes", value: domNodeCount },
+          ],
+        },
         source: "technical-baseline",
       });
     }
@@ -478,12 +604,35 @@ function cleanText(value?: string) {
     .trim();
 }
 
-function uniqueMatches(html: string, pattern: RegExp) {
-  return Array.from(html.matchAll(pattern))
-    .map((match) => match[1]?.toLowerCase())
+function uniqueValues(values: string[]) {
+  return values
     .filter(Boolean)
-    .filter((value, index, values) => values.indexOf(value) === index)
+    .filter((value, index, allValues) => allValues.indexOf(value) === index)
     .slice(0, 50);
+}
+
+function extractWordPressAssets(html: string, type: "plugins" | "themes") {
+  const pattern = new RegExp(
+    `(?:https?:)?//[^"'\\s]+/wp-content/${type}/([^/"'?\\s]+)([^"'\\s]*)|/wp-content/${type}/([^/"'?\\s]+)([^"'\\s]*)`,
+    "gi",
+  );
+
+  return Array.from(html.matchAll(pattern))
+    .map((match) => {
+      const slug = (match[1] ?? match[3] ?? "").toLowerCase();
+      const suffix = match[2] ?? match[4] ?? "";
+
+      return {
+        slug,
+        path: `/wp-content/${type}/${slug}${suffix}`.slice(0, 180),
+      };
+    })
+    .filter((asset) => /^[a-z0-9._-]+$/.test(asset.slug))
+    .filter(
+      (asset, index, allAssets) =>
+        allAssets.findIndex((candidate) => candidate.path === asset.path) === index,
+    )
+    .slice(0, 30);
 }
 
 function hasMissingImageAlt(tag: string) {
@@ -506,19 +655,27 @@ function hasMissingFormLabel(tag: string, html: string) {
   return !id || !new RegExp(`<label\\b[^>]*\\bfor=["']${escapeRegExp(id)}["']`, "i").test(html);
 }
 
-function countEmptyLinks(html: string) {
+function getEmptyLinkExamples(html: string) {
   const links = html.match(/<a\b[^>]*>[\s\S]*?<\/a>/gi) ?? [];
 
-  return links.filter((link) => {
-    if (/\s(aria-label|aria-labelledby|title)\s*=/i.test(link)) {
-      return false;
-    }
+  return links
+    .filter((link) => {
+      if (/\s(aria-label|aria-labelledby|title)\s*=/i.test(link)) {
+        return false;
+      }
 
-    const text = cleanText(link);
-    const imageAlt = link.match(/\salt\s*=\s*["']([^"']+)["']/i)?.[1]?.trim();
+      const text = cleanText(link);
+      const imageAlt = link.match(/\salt\s*=\s*["']([^"']+)["']/i)?.[1]?.trim();
 
-    return !text && !imageAlt;
-  }).length;
+      return !text && !imageAlt;
+    })
+    .map(summarizeHtml);
+}
+
+function getMixedContentExamples(html: string) {
+  const matches = html.match(/(?:src|href)=["']http:\/\/[^"']+["']/gi) ?? [];
+
+  return uniqueValues(matches.map((match) => match.slice(0, 180)));
 }
 
 function getMissingSecurityHeaders(response: Response, url: URL) {
@@ -548,6 +705,25 @@ function getMissingSecurityHeaders(response: Response, url: URL) {
   }
 
   return missing;
+}
+
+function getPresentSecurityHeaders(response: Response, url: URL) {
+  const headers = [
+    "strict-transport-security",
+    "content-security-policy",
+    "x-frame-options",
+    "x-content-type-options",
+    "referrer-policy",
+    "permissions-policy",
+  ];
+
+  return headers
+    .filter((header) => header !== "strict-transport-security" || url.protocol === "https:")
+    .map((header) => ({
+      header,
+      value: response.headers.get(header),
+    }))
+    .filter((header) => header.value);
 }
 
 async function getSupportFileSignals(origin: string) {
@@ -584,4 +760,8 @@ async function fetchSupportFile(url: string) {
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function summarizeHtml(value: string) {
+  return value.replace(/\s+/g, " ").trim().slice(0, 220);
 }

@@ -1,6 +1,7 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { technicalScanner } from "@/lib/scanners/adapters/technical";
+import { waveAccessibilityScanner } from "@/lib/scanners/adapters/wave";
 import type { ScannerFinding } from "@/lib/scanners/types";
 
 type ScanConfig = {
@@ -45,11 +46,40 @@ export async function processScan(scanId: string) {
     });
 
     try {
-      const findings = await technicalScanner.run({
+      const scannerContext = {
         scanId,
         url: scannedUrl.normalizedUrl,
         maxPages: config.maxPages ?? 25,
         includeSubpages: config.includeSubpages ?? false,
+      };
+      const scannerResults = await Promise.allSettled(
+        [technicalScanner, waveAccessibilityScanner].map((scanner) =>
+          scanner.run(scannerContext),
+        ),
+      );
+      const findings = scannerResults.flatMap((result, index) => {
+        if (result.status === "fulfilled") {
+          return result.value;
+        }
+
+        const scannerName = [technicalScanner, waveAccessibilityScanner][index].name;
+
+        return [
+          {
+            category: "TECHNICAL",
+            severity: "MEDIUM",
+            title: `${scannerName} did not complete`,
+            description:
+              result.reason instanceof Error
+                ? result.reason.message
+                : "The scanner failed unexpectedly.",
+            impact:
+              "This report may be missing some provider-specific details for the scanned page.",
+            recommendation:
+              "Review scanner credentials, provider limits, and retry the scan.",
+            source: scannerName,
+          } satisfies ScannerFinding,
+        ];
       });
 
       const normalizedFindings =

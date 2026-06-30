@@ -1,11 +1,18 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import type { ReactNode } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
   Clock3,
+  Download,
   ExternalLink,
+  ListChecks,
+  MonitorCog,
+  Save,
+  SearchCode,
+  ShieldAlert,
 } from "lucide-react";
 import { prisma } from "@/lib/db/prisma";
 
@@ -29,12 +36,71 @@ const severityStyles = {
   CRITICAL: "border-red-300/20 bg-red-300/10 text-red-100",
 };
 
+const attentionConfig = {
+  URGENT: {
+    label: "Urgent",
+    color: "#f87171",
+    classes: "border-red-300/30 bg-red-300/10 text-red-100",
+  },
+  HIGH: {
+    label: "High",
+    color: "#fb923c",
+    classes: "border-orange-300/30 bg-orange-300/10 text-orange-100",
+  },
+  MEDIUM: {
+    label: "Medium",
+    color: "#fbbf24",
+    classes: "border-amber-300/30 bg-amber-300/10 text-amber-100",
+  },
+  LOW: {
+    label: "Low",
+    color: "#34d399",
+    classes: "border-emerald-300/30 bg-emerald-300/10 text-emerald-100",
+  },
+};
+
+const attentionOrder = ["URGENT", "HIGH", "MEDIUM", "LOW"] as const;
+const categoryOrder = [
+  "WEBSITE_UPDATES",
+  "ADA",
+  "SPEED",
+  "SEO",
+  "SECURITY",
+  "TECHNICAL",
+  "OTHER",
+] as const;
+
 const statusStyles = {
   QUEUED: "border-amber-300/25 bg-amber-300/10 text-amber-100",
   RUNNING: "border-cyan-300/25 bg-cyan-300/10 text-cyan-100",
   COMPLETED: "border-emerald-300/25 bg-emerald-300/10 text-emerald-100",
   FAILED: "border-red-300/25 bg-red-300/10 text-red-100",
   CANCELLED: "border-slate-300/25 bg-slate-300/10 text-slate-100",
+};
+
+type ReportFinding = {
+  id: string;
+  severity: keyof typeof severityStyles;
+  title: string;
+  description: string;
+  impact: string | null;
+  recommendation: string | null;
+  evidence: unknown;
+  source: string;
+};
+
+type SavedReport = {
+  id: string;
+  title: string;
+  summary: string | null;
+  content: unknown;
+  createdAt: Date;
+  scan: {
+    urls: {
+      url: string;
+      normalizedUrl: string;
+    }[];
+  };
 };
 
 export default async function ScanReportPage({
@@ -64,6 +130,34 @@ export default async function ScanReportPage({
     notFound();
   }
 
+  const rootUrl = scan.urls[0]?.normalizedUrl ?? scan.urls[0]?.url ?? "";
+  const savedReports = rootUrl
+    ? await prisma.report.findMany({
+        where: {
+          audience: "CLIENT",
+          format: "HTML",
+          scan: {
+            urls: {
+              some: {
+                normalizedUrl: rootUrl,
+              },
+            },
+          },
+        },
+        include: {
+          scan: {
+            include: {
+              urls: {
+                orderBy: { createdAt: "asc" },
+              },
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 8,
+      })
+    : [];
+
   const groupedFindings = scan.findings.reduce(
     (groups, finding) => {
       groups[finding.category] ??= [];
@@ -72,6 +166,22 @@ export default async function ScanReportPage({
     },
     {} as Record<keyof typeof categoryLabels, typeof scan.findings>,
   );
+  const orderedGroups = categoryOrder
+    .filter((category) => groupedFindings[category]?.length > 0)
+    .map((category) => ({
+      category,
+      findings: sortFindingsByAttention(groupedFindings[category]),
+      score: getSectionScore(groupedFindings[category]),
+    }))
+    .sort((first, second) => {
+      const scoreDifference = first.score - second.score;
+
+      if (scoreDifference !== 0) {
+        return scoreDifference;
+      }
+
+      return categoryOrder.indexOf(first.category) - categoryOrder.indexOf(second.category);
+    });
 
   const isProcessing = scan.status === "QUEUED" || scan.status === "RUNNING";
 
@@ -79,7 +189,7 @@ export default async function ScanReportPage({
     <main className="min-h-screen bg-[#070b10] text-slate-100">
       {isProcessing ? <meta httpEquiv="refresh" content="5" /> : null}
       <section className="border-b border-white/10 bg-[#0b1118]">
-        <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <div className="mx-auto w-full max-w-8xl px-4 py-6 sm:px-6 lg:px-8">
           <Link
             href="/"
             className="inline-flex items-center gap-2 text-sm font-medium text-slate-400 transition hover:text-white"
@@ -114,7 +224,7 @@ export default async function ScanReportPage({
         </div>
       </section>
 
-      <section className="mx-auto grid w-full max-w-7xl gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[320px_1fr] lg:px-8">
+      <section className="mx-auto grid w-full max-w-8xl gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[320px_1fr] lg:px-8">
         <aside className="space-y-4">
           <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
             <h2 className="text-sm font-semibold text-white">Scanned URLs</h2>
@@ -142,6 +252,8 @@ export default async function ScanReportPage({
             signals, security headers, robots, and sitemap. WAVE and PageSpeed
             are the next provider adapters to turn on.
           </div>
+
+          <SaveReportPanel scanId={scan.id} savedReports={savedReports} />
         </aside>
 
         <div className="space-y-5">
@@ -168,64 +280,867 @@ export default async function ScanReportPage({
               </p>
             </div>
           ) : (
-            Object.entries(groupedFindings).map(([category, findings]) => (
-              <section
-                key={category}
-                className="rounded-lg border border-white/10 bg-[#0f151d] p-5"
-              >
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <h2 className="text-lg font-semibold text-white">
-                    {categoryLabels[category as keyof typeof categoryLabels]}
-                  </h2>
-                  <span className="text-sm text-slate-500">
-                    {findings.length} finding{findings.length === 1 ? "" : "s"}
-                  </span>
-                </div>
-
-                <div className="mt-4 space-y-3">
-                  {findings.map((finding) => (
-                    <article
-                      key={finding.id}
-                      className="rounded-lg border border-white/10 bg-white/[0.03] p-4"
-                    >
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div>
-                          <h3 className="font-semibold text-white">{finding.title}</h3>
-                          <p className="mt-2 text-sm leading-6 text-slate-300">
-                            {finding.description}
-                          </p>
-                        </div>
-                        <span
-                          className={`inline-flex w-fit shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold ${severityStyles[finding.severity]}`}
-                        >
-                          {finding.severity}
-                        </span>
-                      </div>
-
-                      {finding.impact || finding.recommendation ? (
-                        <div className="mt-4 grid gap-3 md:grid-cols-2">
-                          {finding.impact ? (
-                            <div className="rounded-lg border border-amber-300/20 bg-amber-300/10 p-3 text-sm leading-6 text-amber-100">
-                              <span className="font-semibold">Why it matters: </span>
-                              {finding.impact}
-                            </div>
-                          ) : null}
-                          {finding.recommendation ? (
-                            <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm leading-6 text-emerald-100">
-                              <span className="font-semibold">Recommended fix: </span>
-                              {finding.recommendation}
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </article>
-                  ))}
-                </div>
-              </section>
-            ))
+            orderedGroups.map(({ category, findings }) =>
+              category === "WEBSITE_UPDATES" ? (
+                <WebsiteUpdatesSection
+                  key={category}
+                  findings={findings}
+                  urlCount={scan.urls.length}
+                />
+              ) : (
+                <GenericFindingSection
+                  key={category}
+                  category={category}
+                  findings={findings}
+                />
+              ),
+            )
           )}
         </div>
       </section>
     </main>
   );
+}
+
+function SaveReportPanel({
+  scanId,
+  savedReports,
+}: {
+  scanId: string;
+  savedReports: SavedReport[];
+}) {
+  const latest = getSavedReportMeta(savedReports[0]?.content);
+  const previous = getSavedReportMeta(savedReports[1]?.content);
+  const improvement =
+    latest && previous ? latest.overallScore - previous.overallScore : null;
+
+  return (
+    <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-4">
+      <div className="flex items-center gap-2 text-sm font-semibold text-emerald-100">
+        <Save className="h-4 w-4" />
+        Save & PDF
+      </div>
+      <p className="mt-2 text-sm leading-6 text-emerald-50/80">
+        Save a dated report before updates, then scan again after the work to
+        compare scores.
+      </p>
+
+      <div className="mt-4 grid gap-2">
+        <form action={`/api/scans/${scanId}/reports`} method="post">
+          <button
+            type="submit"
+            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-emerald-300 px-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200"
+          >
+            <Save className="h-4 w-4" />
+            Save Report
+          </button>
+        </form>
+        <a
+          href={`/api/scans/${scanId}/reports/pdf`}
+          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 text-sm font-semibold text-white transition hover:bg-white/10"
+        >
+          <Download className="h-4 w-4" />
+          Download PDF
+        </a>
+      </div>
+
+      {improvement !== null ? (
+        <div className="mt-4 rounded-lg border border-white/10 bg-black/20 p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-emerald-200">
+            Latest change
+          </div>
+          <div className="mt-1 text-2xl font-semibold text-white">
+            {improvement > 0 ? "+" : ""}
+            {improvement}
+          </div>
+          <p className="text-xs leading-5 text-emerald-50/70">
+            Compared with the previous saved report for this website.
+          </p>
+        </div>
+      ) : null}
+
+      <div className="mt-4 space-y-2">
+        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-200">
+          Saved reports
+        </div>
+        {savedReports.length > 0 ? (
+          savedReports.map((report) => {
+            const meta = getSavedReportMeta(report.content);
+
+            return (
+              <div
+                key={report.id}
+                className="rounded-lg border border-white/10 bg-black/20 p-3"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-white">
+                      {formatDate(report.createdAt)}
+                    </div>
+                    <div className="mt-1 break-words text-xs leading-5 text-emerald-50/70">
+                      {meta?.website ?? report.scan.urls[0]?.url ?? "Saved website report"}
+                    </div>
+                  </div>
+                  <div className="rounded-full border border-emerald-300/30 px-2.5 py-1 text-xs font-semibold text-emerald-100">
+                    {meta ? `${meta.overallScore}/100` : "Saved"}
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        ) : (
+          <p className="text-sm leading-6 text-emerald-50/70">
+            No saved reports yet for this website.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WebsiteUpdatesSection({
+  findings,
+  urlCount,
+}: {
+  findings: ReportFinding[];
+  urlCount: number;
+}) {
+  const evidence = collectUpdateEvidence(findings);
+  const score = getSectionScore(findings);
+  const primaryAttention = getPrimaryAttention(findings);
+
+  return (
+    <section className="overflow-hidden rounded-lg border border-emerald-300/20 bg-[#0f151d]">
+      <SectionTopBand attention={primaryAttention} />
+      <div className="border-b border-white/10 bg-white/[0.03] p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-emerald-200">
+              <MonitorCog className="h-4 w-4" />
+              Needed Website Updates
+            </div>
+            <h2 className="mt-2 text-2xl font-semibold text-white">
+              Maintenance and platform signals found on the site
+            </h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
+              This section turns visible site clues into a maintenance checklist.
+              It is not saying every plugin or theme is broken. It shows what a
+              developer should verify first in wp-admin, hosting, backups, and
+              source control.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:min-w-[360px] sm:grid-cols-[120px_1fr]">
+            <ScoreRing score={score} attention={primaryAttention} />
+            <div className="grid grid-cols-2 gap-2 text-center">
+              <MetricCard
+                label="Needs Attention"
+                value={attentionConfig[primaryAttention].label}
+                tone={primaryAttention}
+              />
+              <MetricCard label="Signals" value={String(findings.length)} tone="CYAN" />
+              <MetricCard label="URLs" value={String(urlCount)} tone="SLATE" />
+              <MetricCard label="Perfect" value="100%" tone="EMERALD" />
+            </div>
+          </div>
+        </div>
+        <AttentionSummary findings={findings} />
+      </div>
+
+      <div className="grid gap-4 p-5 xl:grid-cols-[1.1fr_0.9fr]">
+        <div className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-3">
+            <UpdateSummaryCard
+              icon={<ListChecks className="h-4 w-4" />}
+              label="What to verify"
+              items={[
+                "WordPress core",
+                "PHP version",
+                "Active plugins",
+                "Active theme",
+                "Backups before updates",
+              ]}
+            />
+            <UpdateSummaryCard
+              icon={<SearchCode className="h-4 w-4" />}
+              label="Visible evidence"
+              items={[
+                `${evidence.plugins.length} plugin clue${evidence.plugins.length === 1 ? "" : "s"}`,
+                `${evidence.themes.length} theme clue${evidence.themes.length === 1 ? "" : "s"}`,
+                evidence.server ? "Server header found" : "Server header hidden",
+                evidence.generator ? "Generator tag found" : "Generator tag hidden",
+              ]}
+            />
+            <UpdateSummaryCard
+              icon={<ShieldAlert className="h-4 w-4" />}
+              label="Cannot verify publicly"
+              items={[
+                "Actual PHP version",
+                "Exact plugin versions",
+                "Available updates",
+                "Backup status",
+              ]}
+            />
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
+            <h3 className="text-sm font-semibold text-white">Action Checklist</h3>
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              {[
+                "Log into wp-admin and check core/plugin/theme update notices.",
+                "Check hosting for PHP version, SSL, backups, and staging availability.",
+                "Review visible plugins and remove anything unused or abandoned.",
+                "Confirm theme updates will not overwrite custom work.",
+                "Run updates in staging first when the site is business-critical.",
+                "Retest ADA, speed, and SEO after maintenance updates.",
+              ].map((item) => (
+                <div
+                  key={item}
+                  className="flex gap-2 rounded-lg border border-white/10 bg-black/15 p-3 text-sm leading-6 text-slate-300"
+                >
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
+                  <span>{item}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <AttentionFindingList
+              findings={findings}
+              renderFinding={(finding) => (
+                <UpdateFindingCard key={finding.id} finding={finding} />
+              )}
+            />
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <EvidencePanel title="Examples From This Site">
+            {evidence.examples.length > 0 ? (
+              <div className="space-y-2">
+                {evidence.examples.slice(0, 10).map((example) => (
+                  <code
+                    key={example}
+                    className="block overflow-hidden text-ellipsis rounded-md border border-white/10 bg-black/25 px-3 py-2 text-xs leading-5 text-cyan-100"
+                  >
+                    {example}
+                  </code>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm leading-6 text-slate-400">
+                No source path examples were stored for this scan.
+              </p>
+            )}
+          </EvidencePanel>
+
+          <EvidencePanel title="Detected Plugins">
+            {evidence.plugins.length > 0 ? (
+              <TagList items={evidence.plugins} />
+            ) : (
+              <p className="text-sm text-slate-400">No plugin slugs detected.</p>
+            )}
+          </EvidencePanel>
+
+          <EvidencePanel title="Detected Theme / Server">
+            <div className="space-y-3 text-sm leading-6 text-slate-300">
+              <InfoRow label="Theme" value={evidence.themes.join(", ") || "Not detected"} />
+              <InfoRow label="Server" value={evidence.server ?? "Hidden"} />
+              <InfoRow label="Powered By" value={evidence.poweredBy ?? "Hidden"} />
+              <InfoRow label="Generator" value={evidence.generator ?? "Hidden"} />
+            </div>
+          </EvidencePanel>
+
+          <div className="rounded-lg border border-amber-300/20 bg-amber-300/10 p-4 text-sm leading-6 text-amber-100">
+            <span className="font-semibold">Important: </span>
+            public scans can detect clues, not the exact update state. To confirm
+            “needs WordPress/PHP/plugin update,” connect the site, use wp-admin,
+            or check hosting.
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function GenericFindingSection({
+  category,
+  findings,
+}: {
+  category: (typeof categoryOrder)[number];
+  findings: ReportFinding[];
+}) {
+  const score = getSectionScore(findings);
+  const primaryAttention = getPrimaryAttention(findings);
+
+  return (
+    <section className="overflow-hidden rounded-lg border border-white/10 bg-[#0f151d]">
+      <SectionTopBand attention={primaryAttention} />
+      <div className="border-b border-white/10 bg-white/[0.03] p-5">
+        <div className="grid gap-4 lg:grid-cols-[1fr_120px] lg:items-center">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              {getCategoryContext(category)}
+            </div>
+            <h2 className="mt-2 text-2xl font-semibold text-white">
+              {categoryLabels[category]}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-400">
+              {getCategorySummary(category, findings)}
+            </p>
+          </div>
+          <ScoreRing score={score} attention={primaryAttention} />
+        </div>
+        <AttentionSummary findings={findings} />
+      </div>
+
+      <div className="space-y-4 p-5">
+        <AttentionFindingList
+          findings={findings}
+          renderFinding={(finding) => (
+            <article
+              key={finding.id}
+              className="rounded-lg border border-white/10 bg-white/[0.03] p-4"
+            >
+              <FindingHeader finding={finding} />
+              <RecommendationBlocks finding={finding} />
+              <EvidenceDetails finding={finding} />
+            </article>
+          )}
+        />
+      </div>
+    </section>
+  );
+}
+
+function FindingHeader({ finding }: { finding: ReportFinding }) {
+  return (
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div>
+        <h3 className="font-semibold text-white">{finding.title}</h3>
+        <p className="mt-2 text-sm leading-6 text-slate-300">{finding.description}</p>
+      </div>
+      <span
+        className={`inline-flex w-fit shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold ${severityStyles[finding.severity]}`}
+      >
+        {finding.severity}
+      </span>
+    </div>
+  );
+}
+
+function SectionTopBand({
+  attention,
+}: {
+  attention: keyof typeof attentionConfig;
+}) {
+  return (
+    <div
+      className="h-1.5"
+      style={{
+        background: `linear-gradient(90deg, ${attentionConfig[attention].color}, rgba(255,255,255,0.08))`,
+      }}
+    />
+  );
+}
+
+function ScoreRing({
+  score,
+  attention,
+}: {
+  score: number;
+  attention: keyof typeof attentionConfig;
+}) {
+  const color = attentionConfig[attention].color;
+
+  return (
+    <div className="flex justify-center">
+      <div
+        className="grid h-28 w-28 place-items-center rounded-full p-1"
+        style={{
+          background: `conic-gradient(${color} ${score * 3.6}deg, rgba(255,255,255,0.12) 0deg)`,
+        }}
+        aria-label={`Section score ${score} percent`}
+      >
+        <div className="grid h-full w-full place-items-center rounded-full bg-[#0f151d] text-center">
+          <div>
+            <div className="text-3xl font-semibold text-white">{score}</div>
+            <div className="text-xs font-medium text-slate-500">/ 100</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AttentionSummary({ findings }: { findings: ReportFinding[] }) {
+  const summary = getAttentionSummary(findings);
+
+  return (
+    <div className="mt-5 grid gap-2 sm:grid-cols-4">
+      {attentionOrder.map((attention) => (
+        <div
+          key={attention}
+          className={`rounded-lg border px-3 py-2 ${attentionConfig[attention].classes}`}
+        >
+          <div className="text-lg font-semibold">{summary[attention]}</div>
+          <div className="text-xs font-medium opacity-80">
+            {attentionConfig[attention].label}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AttentionFindingList({
+  findings,
+  renderFinding,
+}: {
+  findings: ReportFinding[];
+  renderFinding: (finding: ReportFinding) => ReactNode;
+}) {
+  const grouped = attentionOrder
+    .map((attention) => ({
+      attention,
+      findings: findings.filter((finding) => getAttentionLevel(finding) === attention),
+    }))
+    .filter((group) => group.findings.length > 0);
+
+  return (
+    <div className="space-y-5">
+      {grouped.map((group) => (
+        <section key={group.attention}>
+          <div
+            className={`mb-3 inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${attentionConfig[group.attention].classes}`}
+          >
+            {attentionConfig[group.attention].label} Attention
+          </div>
+          <div className="space-y-3">{group.findings.map(renderFinding)}</div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function UpdateFindingCard({ finding }: { finding: ReportFinding }) {
+  const examples = getStringArrayFromEvidence(finding.evidence, "examples");
+
+  return (
+    <article className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
+      <FindingHeader finding={finding} />
+      <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_0.9fr]">
+        <div className="space-y-3">
+          <RecommendationBlocks finding={finding} />
+          <EvidenceDetails finding={finding} />
+        </div>
+        <div className="rounded-lg border border-cyan-300/20 bg-cyan-300/10 p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-cyan-200">
+            Site example
+          </div>
+          {examples.length > 0 ? (
+            <code className="mt-2 block overflow-hidden text-ellipsis text-xs leading-5 text-cyan-50">
+              {examples[0]}
+            </code>
+          ) : (
+            <p className="mt-2 text-sm leading-6 text-cyan-100/80">
+              No source example stored for this item.
+            </p>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: keyof typeof attentionConfig | "EMERALD" | "CYAN" | "SLATE";
+}) {
+  const tones = {
+    URGENT: "border-red-300/20 bg-red-300/10 text-red-100",
+    HIGH: "border-orange-300/20 bg-orange-300/10 text-orange-100",
+    MEDIUM: "border-amber-300/20 bg-amber-300/10 text-amber-100",
+    LOW: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
+    EMERALD: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
+    CYAN: "border-cyan-300/20 bg-cyan-300/10 text-cyan-100",
+    SLATE: "border-white/10 bg-white/[0.04] text-slate-100",
+  };
+
+  return (
+    <div className={`rounded-lg border p-3 ${tones[tone]}`}>
+      <div className="text-lg font-semibold">{value}</div>
+      <div className="mt-1 text-xs text-current opacity-75">{label}</div>
+    </div>
+  );
+}
+
+function UpdateSummaryCard({
+  icon,
+  label,
+  items,
+}: {
+  icon: ReactNode;
+  label: string;
+  items: string[];
+}) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
+      <div className="flex items-center gap-2 text-sm font-semibold text-white">
+        <span className="text-emerald-300">{icon}</span>
+        {label}
+      </div>
+      <div className="mt-3 space-y-2">
+        {items.map((item) => (
+          <div key={item} className="flex gap-2 text-sm text-slate-300">
+            <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-300" />
+            <span>{item}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EvidencePanel({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
+      <h3 className="text-sm font-semibold text-white">{title}</h3>
+      <div className="mt-3">{children}</div>
+    </div>
+  );
+}
+
+function RecommendationBlocks({ finding }: { finding: ReportFinding }) {
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-3">
+        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-200">
+          Recommended fix
+        </div>
+        <p className="mt-2 text-sm leading-6 text-emerald-50">
+          {finding.recommendation ?? "Review this item during the maintenance check."}
+        </p>
+      </div>
+      {finding.impact ? (
+        <div className="rounded-lg border border-sky-300/20 bg-sky-300/10 p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-sky-200">
+            Why it matters
+          </div>
+          <p className="mt-2 text-sm leading-6 text-sky-50">{finding.impact}</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function EvidenceDetails({ finding }: { finding: ReportFinding }) {
+  const counts = getEvidenceCounts(finding.evidence);
+  const examples = getStringArrayFromEvidence(finding.evidence, "examples");
+  const missingSecurityHeaders = getStringArrayFromEvidence(
+    finding.evidence,
+    "missingSecurityHeaders",
+  );
+
+  if (counts.length === 0 && examples.length === 0 && missingSecurityHeaders.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-white/10 bg-black/20 p-3">
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-300">
+        Specific items found on this site
+      </div>
+
+      {counts.length > 0 ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {counts.slice(0, 6).map((count) => (
+            <div
+              key={`${count.label}-${count.value}`}
+              className="rounded-lg border border-white/10 bg-white/[0.04] p-3"
+            >
+              <div className="text-lg font-semibold text-white">{count.value}</div>
+              <div className="mt-1 text-xs leading-5 text-slate-400">{count.label}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {missingSecurityHeaders.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {missingSecurityHeaders.map((header) => (
+            <span
+              key={header}
+              className="rounded-full border border-orange-300/20 bg-orange-300/10 px-2.5 py-1 text-xs font-medium text-orange-100"
+            >
+              {header}
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      {examples.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {examples.slice(0, 6).map((example) => (
+            <code
+              key={example}
+              className="block overflow-hidden text-ellipsis rounded-md border border-white/10 bg-[#070b10] px-3 py-2 text-xs leading-5 text-cyan-100"
+            >
+              {example}
+            </code>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TagList({ items }: { items: string[] }) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.slice(0, 24).map((item) => (
+        <span
+          key={item}
+          className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-xs font-medium text-slate-200"
+        >
+          {item}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid gap-1 border-b border-white/10 pb-2 last:border-0 last:pb-0">
+      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {label}
+      </span>
+      <span className="break-words text-slate-200">{value}</span>
+    </div>
+  );
+}
+
+function collectUpdateEvidence(findings: ReportFinding[]) {
+  const plugins = new Set<string>();
+  const themes = new Set<string>();
+  const examples = new Set<string>();
+  let server: string | undefined;
+  let poweredBy: string | undefined;
+  let generator: string | undefined;
+
+  findings.forEach((finding) => {
+    getStringArrayFromEvidence(finding.evidence, "plugins").forEach((plugin) =>
+      plugins.add(plugin),
+    );
+    getStringArrayFromEvidence(finding.evidence, "themes").forEach((theme) =>
+      themes.add(theme),
+    );
+    getStringArrayFromEvidence(finding.evidence, "examples").forEach((example) =>
+      examples.add(example),
+    );
+    server ??= getStringFromEvidence(finding.evidence, "server");
+    poweredBy ??= getStringFromEvidence(finding.evidence, "poweredBy");
+    generator ??= getStringFromEvidence(finding.evidence, "generator");
+  });
+
+  return {
+    plugins: Array.from(plugins),
+    themes: Array.from(themes),
+    examples: Array.from(examples),
+    server,
+    poweredBy,
+    generator,
+  };
+}
+
+function sortFindingsByAttention(findings: ReportFinding[]) {
+  return [...findings].sort((first, second) => {
+    const attentionDifference =
+      attentionOrder.indexOf(getAttentionLevel(first)) -
+      attentionOrder.indexOf(getAttentionLevel(second));
+
+    if (attentionDifference !== 0) {
+      return attentionDifference;
+    }
+
+    return severityWeight(second.severity) - severityWeight(first.severity);
+  });
+}
+
+function getAttentionLevel(finding: ReportFinding) {
+  if (finding.severity === "CRITICAL") {
+    return "URGENT";
+  }
+
+  if (finding.severity === "HIGH") {
+    return "HIGH";
+  }
+
+  if (finding.severity === "MEDIUM") {
+    return "MEDIUM";
+  }
+
+  return "LOW";
+}
+
+function getAttentionSummary(findings: ReportFinding[]) {
+  return findings.reduce(
+    (summary, finding) => {
+      summary[getAttentionLevel(finding)] += 1;
+      return summary;
+    },
+    {
+      URGENT: 0,
+      HIGH: 0,
+      MEDIUM: 0,
+      LOW: 0,
+    } as Record<keyof typeof attentionConfig, number>,
+  );
+}
+
+function getPrimaryAttention(findings: ReportFinding[]) {
+  return (
+    attentionOrder.find((attention) =>
+      findings.some((finding) => getAttentionLevel(finding) === attention),
+    ) ?? "LOW"
+  );
+}
+
+function getSectionScore(findings: ReportFinding[]) {
+  const penalty = findings.reduce((total, finding) => {
+    return total + severityWeight(finding.severity);
+  }, 0);
+
+  return Math.max(0, Math.min(100, 100 - penalty));
+}
+
+function severityWeight(severity: ReportFinding["severity"]) {
+  const weights = {
+    CRITICAL: 35,
+    HIGH: 25,
+    MEDIUM: 14,
+    LOW: 7,
+    INFO: 0,
+  };
+
+  return weights[severity];
+}
+
+function getCategoryContext(category: keyof typeof categoryLabels) {
+  const contexts = {
+    WEBSITE_UPDATES: "Maintenance",
+    ADA: "Accessibility",
+    SPEED: "Performance",
+    SEO: "Search visibility",
+    SECURITY: "Hardening",
+    TECHNICAL: "Diagnostics",
+    OTHER: "Additional signals",
+  };
+
+  return contexts[category];
+}
+
+function getCategorySummary(
+  category: keyof typeof categoryLabels,
+  findings: ReportFinding[],
+) {
+  const topAttention = attentionConfig[getPrimaryAttention(findings)].label;
+  const count = findings.length;
+  const plural = count === 1 ? "finding" : "findings";
+  const summaries = {
+    WEBSITE_UPDATES:
+      "Maintenance clues from public source, headers, and CMS asset paths.",
+    ADA: "Accessibility issues and baseline checks that can affect visitors using assistive technology.",
+    SPEED:
+      "Performance signals from visible page weight, scripts, styles, and image usage.",
+    SEO: "Search visibility checks for titles, descriptions, headings, canonicals, robots, and sitemap signals.",
+    SECURITY:
+      "Security and trust checks from headers, HTTPS behavior, and mixed-content clues.",
+    TECHNICAL:
+      "Connection, response, redirect, and diagnostic details for developers.",
+    OTHER: "Additional scanner findings that do not fit the main report groups.",
+  };
+
+  return `${summaries[category]} ${count} ${plural}; highest attention level: ${topAttention}.`;
+}
+
+function getStringArrayFromEvidence(evidence: unknown, key: string) {
+  if (!isRecord(evidence) || !Array.isArray(evidence[key])) {
+    return [];
+  }
+
+  return evidence[key].filter((item): item is string => typeof item === "string");
+}
+
+function getStringFromEvidence(evidence: unknown, key: string) {
+  if (!isRecord(evidence)) {
+    return undefined;
+  }
+
+  return typeof evidence[key] === "string" ? evidence[key] : undefined;
+}
+
+function getEvidenceCounts(evidence: unknown) {
+  if (!isRecord(evidence) || !Array.isArray(evidence.counts)) {
+    return [];
+  }
+
+  return evidence.counts
+    .map((item) => {
+      if (!isRecord(item)) {
+        return null;
+      }
+
+      const label = item.label;
+      const value = item.value;
+
+      if (typeof label !== "string" || typeof value !== "number") {
+        return null;
+      }
+
+      return { label, value };
+    })
+    .filter((item): item is { label: string; value: number } => Boolean(item));
+}
+
+function getSavedReportMeta(content: unknown) {
+  if (!isRecord(content)) {
+    return null;
+  }
+
+  const overallScore = content.overallScore;
+  const website = content.website;
+
+  if (typeof overallScore !== "number") {
+    return null;
+  }
+
+  return {
+    overallScore,
+    website: typeof website === "string" ? website : undefined,
+  };
+}
+
+function formatDate(date: Date) {
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

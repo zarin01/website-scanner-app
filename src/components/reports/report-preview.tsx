@@ -19,7 +19,7 @@ const icons = {
 export function ReportPreview() {
   return (
     <section className="border-t border-white/10 bg-[#070b10]">
-      <div className="mx-auto grid w-full max-w-7xl gap-6 px-4 py-10 sm:px-6 lg:grid-cols-[260px_1fr] lg:px-8">
+      <div className="mx-auto grid w-full max-w-8xl gap-6 px-4 py-10 sm:px-6 lg:grid-cols-[260px_1fr] lg:px-8">
         <aside>
           <div className="sticky top-6 rounded-lg border border-white/10 bg-white/[0.04] p-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-white">
