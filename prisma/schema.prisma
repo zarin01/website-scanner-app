@@ -33,6 +33,7 @@ enum UrlStatus {
 enum FindingCategory {
   WEBSITE_UPDATES
   FUNCTIONALITY
+  AI_OPPORTUNITIES
   ADA
   SPEED
   SEO

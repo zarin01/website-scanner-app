@@ -1,6 +1,7 @@
 const categoryLabels = {
   WEBSITE_UPDATES: "Needed Website Updates",
   FUNCTIONALITY: "Core Functionality",
+  AI_OPPORTUNITIES: "AI Opportunities",
   ADA: "ADA Report",
   SPEED: "Speed Report",
   SEO: "SEO Report",
@@ -12,6 +13,7 @@ const categoryLabels = {
 const categoryOrder = [
   "WEBSITE_UPDATES",
   "FUNCTIONALITY",
+  "AI_OPPORTUNITIES",
   "ADA",
   "SPEED",
   "SEO",

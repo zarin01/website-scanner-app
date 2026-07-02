@@ -11,6 +11,35 @@ type LinkCheck = {
   ok: boolean;
 };
 
+type PageLink = {
+  tag: string;
+  href: string;
+  text: string;
+};
+
+const CHATBOT_PATTERNS = [
+  { label: "Intercom", pattern: /intercom(?:cdn|\.io|\.com)|intercomSettings/i },
+  { label: "Drift", pattern: /drift\.com|driftt\.com|drift\.load/i },
+  { label: "Tawk.to", pattern: /tawk\.to|Tawk_API/i },
+  { label: "Crisp", pattern: /crisp\.chat|CRISP_WEBSITE_ID/i },
+  { label: "Zendesk chat", pattern: /zendesk|zE\(|zdassets\.com/i },
+  { label: "HubSpot chat", pattern: /HubSpotConversations|js\.hs-scripts\.com|hubspot/i },
+  { label: "LiveChat", pattern: /livechatinc\.com|LiveChatWidget/i },
+  { label: "Tidio", pattern: /tidio\.co|tidiochat/i },
+  { label: "Freshchat", pattern: /freshchat|freshworks/i },
+  { label: "Gorgias", pattern: /gorgias/i },
+  { label: "Help Scout Beacon", pattern: /beacon-v2\.helpscout\.net|HelpScout/i },
+  { label: "Chatwoot", pattern: /chatwoot/i },
+  { label: "Olark", pattern: /olark/i },
+  { label: "Zoho SalesIQ", pattern: /salesiq\.zoho/i },
+  { label: "Facebook customer chat", pattern: /fb-customerchat|facebook\.com\/customerchat/i },
+  { label: "Chatbase", pattern: /chatbase\.co|chatbase\.js/i },
+  { label: "Botpress", pattern: /botpress/i },
+  { label: "Voiceflow", pattern: /voiceflow/i },
+  { label: "CustomGPT", pattern: /customgpt/i },
+  { label: "SiteGPT", pattern: /sitegpt/i },
+] as const;
+
 export const functionalityScanner: ScannerAdapter = {
   name: "functionality-baseline",
   async run({ url }) {
@@ -26,6 +55,7 @@ export const functionalityScanner: ScannerAdapter = {
     const parsedUrl = new URL(finalUrl);
     const domain = getMailDomain(parsedUrl.hostname);
     const findings: ScannerFinding[] = [];
+    const links = getLinks(html);
 
     const [mxRecords, spfRecord, dmarcRecord] = await Promise.all([
       getMxRecords(domain),
@@ -35,19 +65,24 @@ export const functionalityScanner: ScannerAdapter = {
 
     const forms = getTags(html, "form");
     const contactForms = forms.filter(isContactForm);
+    const leadIntakeForms = forms.filter(isLeadIntakeForm);
     const emailInputs = getTags(html, "input").filter((tag) =>
       /\btype\s*=\s*["']?email/i.test(tag),
     );
-    const mailtoLinks = getLinks(html).filter((link) => link.href.startsWith("mailto:"));
-    const telLinks = getLinks(html).filter((link) => link.href.startsWith("tel:"));
+    const mailtoLinks = links.filter((link) => link.href.startsWith("mailto:"));
+    const telLinks = links.filter((link) => link.href.startsWith("tel:"));
     const exposedEmails = uniqueValues(
       Array.from(html.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)).map(
         (match) => match[0],
       ),
     );
-    const brokenActionLinks = getBrokenActionLinks(html);
+    const chatbotSignals = getChatbotSignals(html);
+    const bookingLinks = links.filter(isBookingLink);
+    const supportLinks = links.filter(isSupportLink);
+    const faqSignals = getFaqSignals(html, links);
+    const brokenActionLinks = getBrokenActionLinks(links);
     const problematicForms = forms.filter(hasProblematicFormSetup);
-    const sampledLinks = getSameSiteLinks(html, parsedUrl).slice(0, MAX_LINK_CHECKS);
+    const sampledLinks = getSameSiteLinks(links, parsedUrl).slice(0, MAX_LINK_CHECKS);
     const checkedLinks = await Promise.all(sampledLinks.map(checkLink));
     const brokenLinks = checkedLinks.filter((link) => !link.ok);
 
@@ -79,6 +114,104 @@ export const functionalityScanner: ScannerAdapter = {
       },
       source: "functionality-baseline",
     });
+
+    findings.push({
+      category: "AI_OPPORTUNITIES",
+      severity: chatbotSignals.length > 0 ? "INFO" : "MEDIUM",
+      title:
+        chatbotSignals.length > 0
+          ? "Chat or AI assistant detected"
+          : "No AI chat assistant detected",
+      description:
+        chatbotSignals.length > 0
+          ? `${chatbotSignals.length} public chat or assistant signal${chatbotSignals.length === 1 ? "" : "s"} were found in the page source.`
+          : "The scanned page did not show a public chat widget, AI assistant, or obvious automated help tool.",
+      impact:
+        chatbotSignals.length > 0
+          ? "A chat tool can reduce phone and email load, but it should be reviewed for after-hours handling, answer quality, lead routing, and AI automation options."
+          : "Visitors may still rely on phone calls, emails, or staff follow-up for repetitive questions that an AI assistant could answer immediately.",
+      recommendation:
+        chatbotSignals.length > 0
+          ? "Review the current chat setup and consider AI answers for FAQs, service questions, lead qualification, and appointment routing."
+          : "Add a website assistant trained on services, FAQs, hours, pricing guidance, forms, and contact rules so common questions do not require staff time.",
+      evidence: {
+        counts: [
+          { label: "Chatbot signals found", value: chatbotSignals.length },
+          { label: "Forms found", value: forms.length },
+          { label: "Booking links found", value: bookingLinks.length },
+          { label: "FAQ/help signals", value: faqSignals.length },
+        ],
+        examples:
+          chatbotSignals.length > 0
+            ? chatbotSignals
+            : [
+                ...contactForms.slice(0, 2).map(summarizeHtml),
+                ...bookingLinks.slice(0, 2).map((link) => `${link.text || "Booking link"}: ${link.href}`),
+                ...faqSignals.slice(0, 3),
+              ],
+      },
+      source: "functionality-baseline",
+    });
+
+    if (
+      contactForms.length > 0 ||
+      leadIntakeForms.length > 0 ||
+      bookingLinks.length > 0 ||
+      exposedEmails.length > 0 ||
+      telLinks.length > 0
+    ) {
+      findings.push({
+        category: "AI_OPPORTUNITIES",
+        severity: leadIntakeForms.length > 0 || bookingLinks.length > 0 ? "MEDIUM" : "LOW",
+        title: "AI lead intake could reduce manual follow-up",
+        description:
+          "The page has public lead or contact paths that could be supported by AI intake, routing, and follow-up prompts.",
+        impact:
+          "An AI intake flow can collect project details, answer repeat questions, qualify inquiries, and route the next step before staff has to respond.",
+        recommendation:
+          "Add an AI-assisted intake flow for quotes, bookings, support, or service questions, then send clean summaries to email, CRM, or the client's task list.",
+        evidence: {
+          counts: [
+            { label: "Likely contact forms", value: contactForms.length },
+            { label: "Lead intake forms", value: leadIntakeForms.length },
+            { label: "Booking links", value: bookingLinks.length },
+            { label: "Phone links", value: telLinks.length },
+          ],
+          examples: [
+            ...leadIntakeForms.slice(0, 4).map(summarizeHtml),
+            ...bookingLinks.slice(0, 4).map((link) => `${link.text || "Booking link"}: ${link.href}`),
+            ...mailtoLinks.slice(0, 2).map((link) => link.href),
+            ...telLinks.slice(0, 2).map((link) => link.href),
+          ],
+        },
+        source: "functionality-baseline",
+      });
+    }
+
+    if (faqSignals.length > 0 || supportLinks.length > 0) {
+      findings.push({
+        category: "AI_OPPORTUNITIES",
+        severity: "LOW",
+        title: "FAQ and help content can power an AI assistant",
+        description:
+          "The page includes FAQ, help, support, or question-style content that could become a knowledge base for automated answers.",
+        impact:
+          "Existing support content lowers setup time because the assistant can start with answers the client already approves.",
+        recommendation:
+          "Use this content to train an AI helper, then add guardrails for quotes, medical/legal claims, emergency issues, and anything that should route to staff.",
+        evidence: {
+          counts: [
+            { label: "FAQ/question signals", value: faqSignals.length },
+            { label: "Help/support links", value: supportLinks.length },
+          ],
+          examples: [
+            ...faqSignals.slice(0, 5),
+            ...supportLinks.slice(0, 5).map((link) => `${link.text || "Support link"}: ${link.href}`),
+          ],
+        },
+        source: "functionality-baseline",
+      });
+    }
 
     if (mxRecords.length === 0) {
       findings.push({
@@ -296,8 +429,8 @@ function getLinks(html: string) {
     .filter((link) => link.href);
 }
 
-function getSameSiteLinks(html: string, pageUrl: URL) {
-  const links = getLinks(html)
+function getSameSiteLinks(links: PageLink[], pageUrl: URL) {
+  const sameSiteLinks = links
     .map((link) => {
       try {
         const url = new URL(link.href, pageUrl);
@@ -318,7 +451,7 @@ function getSameSiteLinks(html: string, pageUrl: URL) {
     })
     .filter((link): link is string => Boolean(link));
 
-  return uniqueValues(links).filter((link) => link !== pageUrl.toString());
+  return uniqueValues(sameSiteLinks).filter((link) => link !== pageUrl.toString());
 }
 
 async function checkLink(url: string): Promise<LinkCheck> {
@@ -361,6 +494,12 @@ function isContactForm(form: string) {
   );
 }
 
+function isLeadIntakeForm(form: string) {
+  return /quote|estimate|consult|booking|appointment|apply|register|request|intake|contact|message|email|phone/i.test(
+    form,
+  );
+}
+
 function hasProblematicFormSetup(form: string) {
   const action = getAttribute(form, "action");
 
@@ -373,14 +512,52 @@ function hasProblematicFormSetup(form: string) {
   );
 }
 
-function getBrokenActionLinks(html: string) {
-  return getLinks(html)
+function getBrokenActionLinks(links: PageLink[]) {
+  return links
     .filter((link) => /contact|quote|book|schedule|call|email|buy|donate|apply|register/i.test(link.text))
     .filter((link) => {
       const href = link.href.trim().toLowerCase();
       return href === "" || href === "#" || href === "/" || href.startsWith("javascript:");
     })
     .map((link) => summarizeHtml(link.tag));
+}
+
+function isBookingLink(link: PageLink) {
+  return /calendly|acuityscheduling|book|schedule|appointment|reservation|consultation|meeting|calendar/i.test(
+    `${link.text} ${link.href}`,
+  );
+}
+
+function isSupportLink(link: PageLink) {
+  return /faq|help|support|knowledge|docs|documentation|resources|questions/i.test(
+    `${link.text} ${link.href}`,
+  );
+}
+
+function getChatbotSignals(html: string) {
+  return uniqueValues(
+    CHATBOT_PATTERNS.filter(({ pattern }) => pattern.test(html)).map(
+      ({ label }) => label,
+    ),
+  );
+}
+
+function getFaqSignals(html: string, links: PageLink[]) {
+  const schemaSignals = /"@type"\s*:\s*"FAQPage"|"@type"\s*:\s*\[\s*"FAQPage"/i.test(
+    html,
+  )
+    ? ["FAQ schema found"]
+    : [];
+  const linkSignals = links
+    .filter(isSupportLink)
+    .map((link) => `${link.text || "Help link"}: ${link.href}`);
+  const headingSignals = Array.from(
+    html.matchAll(/<h[1-6]\b[^>]*>[\s\S]*?<\/h[1-6]>/gi),
+  )
+    .map((match) => cleanText(match[0]))
+    .filter((text) => /\?|^(what|how|when|where|why|can|do|does|will)\b/i.test(text));
+
+  return uniqueValues([...schemaSignals, ...linkSignals, ...headingSignals]);
 }
 
 function getAttribute(tag: string, name: string) {

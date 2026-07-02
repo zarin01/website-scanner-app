@@ -6,6 +6,10 @@ import { lighthouseScanner } from "@/lib/scanners/adapters/lighthouse";
 import { reputationScanner } from "@/lib/scanners/adapters/reputation";
 import { technicalScanner } from "@/lib/scanners/adapters/technical";
 import { waveAccessibilityScanner } from "@/lib/scanners/adapters/wave";
+import {
+  getScanFailureLogContext,
+  getScanFailurePresentation,
+} from "@/lib/scanners/error-formatting";
 import type { ScannerFinding } from "@/lib/scanners/types";
 
 type ScanConfig = {
@@ -72,20 +76,31 @@ export async function processScan(scanId: string) {
         }
 
         const scannerName = scanners[index].name;
+        const failure = getScanFailurePresentation(result.reason);
+
+        console.error(
+          "Scanner adapter failed.",
+          getScanFailureLogContext(result.reason, {
+            scanId,
+            scannedUrlId: scannedUrl.id,
+            scanner: scannerName,
+            url: scannedUrl.normalizedUrl,
+          }),
+        );
 
         return [
           {
             category: "TECHNICAL",
             severity: "MEDIUM",
             title: `${scannerName} did not complete`,
-            description:
-              result.reason instanceof Error
-                ? result.reason.message
-                : "The scanner failed unexpectedly.",
-            impact:
-              "This report may be missing some provider-specific details for the scanned page.",
-            recommendation:
-              "Review scanner credentials, provider limits, and retry the scan.",
+            description: failure.message,
+            impact: failure.impact,
+            recommendation: failure.recommendation,
+            evidence: {
+              errorKind: failure.kind,
+              errorCode: failure.code,
+              counts: [{ label: "Failed scanner checks", value: 1 }],
+            },
             source: scannerName,
           } satisfies ScannerFinding,
         ];
@@ -137,8 +152,16 @@ export async function processScan(scanId: string) {
     } catch (error) {
       failedUrlCount += 1;
 
-      const message =
-        error instanceof Error ? error.message : "The scan failed unexpectedly.";
+      const failure = getScanFailurePresentation(error);
+
+      console.error(
+        "Scan URL failed.",
+        getScanFailureLogContext(error, {
+          scanId,
+          scannedUrlId: scannedUrl.id,
+          url: scannedUrl.normalizedUrl,
+        }),
+      );
 
       await prisma.finding.create({
         data: {
@@ -147,11 +170,14 @@ export async function processScan(scanId: string) {
           category: "TECHNICAL",
           severity: "HIGH",
           title: "Scan failed",
-          description: message,
-          impact:
-            "This URL could not be scanned, so the report may be incomplete.",
-          recommendation:
-            "Confirm the URL is reachable and retry the scan. Some hosts block automated requests.",
+          description: failure.message,
+          impact: failure.impact,
+          recommendation: failure.recommendation,
+          evidence: {
+            errorKind: failure.kind,
+            errorCode: failure.code,
+            counts: [{ label: "Failed URLs", value: 1 }],
+          },
           source: "technical-baseline",
         },
       });
@@ -160,7 +186,7 @@ export async function processScan(scanId: string) {
         where: { id: scannedUrl.id },
         data: {
           status: "FAILED",
-          error: message,
+          error: failure.message,
           finishedAt: new Date(),
         },
       });
@@ -185,9 +211,12 @@ export async function processScan(scanId: string) {
 
 export function processScanInBackground(scanId: string) {
   void processScan(scanId).catch(async (error) => {
-    const message =
-      error instanceof Error ? error.message : "The scan failed unexpectedly.";
+    const failure = getScanFailurePresentation(error);
 
+    console.error(
+      "Scan failed before URL processing completed.",
+      getScanFailureLogContext(error, { scanId }),
+    );
     console.error(error);
 
     await prisma.scan
@@ -198,7 +227,7 @@ export function processScanInBackground(scanId: string) {
           finishedAt: new Date(),
           summary: {
             failedUrlCount: 1,
-            error: message,
+            error: failure.message,
           },
         },
       })

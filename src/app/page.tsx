@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Bot,
   ClipboardList,
   Database,
   FileText,
@@ -13,13 +14,14 @@ const featureCards = [
   { label: "ADA", value: "WAVE + axe checks", icon: ShieldCheck },
   { label: "Speed", value: "PageSpeed + Lighthouse", icon: Gauge },
   { label: "SEO", value: "Metadata, indexability, schema", icon: BarChart3 },
+  { label: "AI", value: "Chatbots + automation opportunities", icon: Bot },
   { label: "Reports", value: "Client + developer views", icon: FileText },
 ];
 
 export default function Home() {
   return (
-    <main className="min-h-screen bg-[#070b10] text-slate-100">
-      <section className="border-b border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.16),transparent_32rem),linear-gradient(180deg,#0b1118_0%,#070b10_100%)]">
+    <main className="min-h-screen bg-[#111820] text-slate-100">
+      <section className="border-b border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.14),transparent_32rem),linear-gradient(180deg,#1a2330_0%,#111820_100%)]">
         <div className="mx-auto flex w-full max-w-8xl items-center justify-between gap-4 px-4 py-5 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-emerald-400/25 bg-emerald-400/10 text-emerald-300">
@@ -42,7 +44,7 @@ export default function Home() {
           </div>
 
           <aside className="grid content-start gap-3">
-            <div className="rounded-lg border border-white/10 bg-white/[0.04] p-5">
+            <div className="rounded-lg border border-white/10 bg-[#18212c] p-5">
               <div className="text-sm font-medium text-emerald-200">
                 No report yet. Start with a URL.
               </div>
@@ -59,7 +61,7 @@ export default function Home() {
             {featureCards.map(({ label, value, icon: Icon }) => (
               <div
                 key={label}
-                className="rounded-lg border border-white/10 bg-white/[0.04] p-4 shadow-2xl shadow-black/20"
+                className="rounded-lg border border-white/10 bg-[#18212c] p-4 shadow-2xl shadow-slate-950/20"
               >
                 <div className="flex items-start gap-3">
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/10 text-emerald-300">

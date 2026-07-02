@@ -13,6 +13,32 @@ export const reportSections = [
       "These updates protect the site, reduce support problems, and usually fix the issues clients notice first.",
   },
   {
+    key: "functionality",
+    label: "Core Functionality",
+    score: "Lead paths",
+    status: "Revenue impact",
+    items: [
+      "Forms, phone links, email links, booking buttons, and high-value CTAs",
+      "Broken or placeholder action links that can stop visitors from converting",
+      "Email DNS readiness for form notifications and client communication",
+    ],
+    why:
+      "Functionality issues are easy for clients to understand because they connect directly to missed leads, missed calls, and wasted follow-up time.",
+  },
+  {
+    key: "ai-opportunities",
+    label: "AI Opportunities",
+    score: "Time savings",
+    status: "Automation",
+    items: [
+      "Chatbot, live chat, and AI assistant detection",
+      "Lead intake, quote, booking, FAQ, and support automation opportunities",
+      "Ideas for routing inquiries to email, CRM, task lists, or staff follow-up",
+    ],
+    why:
+      "AI updates can turn a website refresh into a time-saving tool that answers repeat questions, qualifies leads, and reduces manual client follow-up.",
+  },
+  {
     key: "ada",
     label: "ADA Report",
     score: "WAVE + axe",
@@ -20,10 +46,11 @@ export const reportSections = [
     items: [
       "Missing labels, contrast issues, heading structure, alt text, and form errors",
       "Template-level accessibility issues grouped for developer fixes",
+      "Government, school, and public-sector signals that make ADA harder to ignore",
       "Client-facing risk and usability summary",
     ],
     why:
-      "ADA updates help more people use the site and reduce legal exposure while improving the quality of the user experience.",
+      "ADA updates help more people use the site and reduce legal exposure. For government and school-related websites, accessibility issues are a stronger priority because public services and education information need to be available to people with disabilities.",
   },
   {
     key: "speed",

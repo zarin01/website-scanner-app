@@ -8,6 +8,7 @@ import {
   Clock3,
   Download,
   ExternalLink,
+  Globe2,
   ListChecks,
   MonitorCog,
   Save,
@@ -15,12 +16,17 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import { prisma } from "@/lib/db/prisma";
+import {
+  getScanFailurePresentation,
+  sanitizeScanFailureText,
+} from "@/lib/scanners/error-formatting";
 
 export const dynamic = "force-dynamic";
 
 const categoryLabels = {
   WEBSITE_UPDATES: "Needed Website Updates",
   FUNCTIONALITY: "Core Functionality",
+  AI_OPPORTUNITIES: "AI Opportunities",
   ADA: "ADA Report",
   SPEED: "Speed Report",
   SEO: "SEO Report",
@@ -64,6 +70,7 @@ const attentionOrder = ["URGENT", "HIGH", "MEDIUM", "LOW"] as const;
 const categoryOrder = [
   "WEBSITE_UPDATES",
   "FUNCTIONALITY",
+  "AI_OPPORTUNITIES",
   "ADA",
   "SPEED",
   "SEO",
@@ -135,6 +142,20 @@ type SectionRating = {
   score: number;
   findingCount: number;
   attention: keyof typeof attentionConfig;
+};
+
+type ClientUpdateDriver = {
+  label: string;
+  title: string;
+  detail: string;
+  classes: string;
+};
+
+type FailedUrlSummary = {
+  id: string;
+  url: string;
+  status: string;
+  error: string | null;
 };
 
 export default async function ScanReportPage({
@@ -220,6 +241,8 @@ export default async function ScanReportPage({
   const isProcessing = scan.status === "QUEUED" || scan.status === "RUNNING";
   const platformSnapshot = getPlatformSnapshot(scan.findings);
   const websiteMetrics = getWebsiteMetrics(scan.findings);
+  const previewUrl =
+    scan.urls[0]?.finalUrl ?? scan.urls[0]?.normalizedUrl ?? scan.urls[0]?.url ?? "";
   const sectionRatings = categoryOrder.map((category) => {
     const findings = groupedFindings[category] ?? [];
 
@@ -230,11 +253,23 @@ export default async function ScanReportPage({
       attention: getPrimaryAttention(findings),
     };
   });
+  const priorityFindings = getPriorityFindings(scan.findings);
+  const overallScore = getOverallScore(sectionRatings);
+  const attentionSummary = getAttentionSummary(scan.findings);
+  const clientDrivers = getClientUpdateDrivers(scan.findings);
+  const failedUrls = scan.urls
+    .filter((url) => url.status === "FAILED")
+    .map((url) => ({
+      id: url.id,
+      url: url.finalUrl ?? url.normalizedUrl ?? url.url,
+      status: url.status,
+      error: url.error,
+    }));
 
   return (
-    <main className="min-h-screen bg-[#070b10] text-slate-100">
+    <main className="min-h-screen bg-[#111820] text-slate-100">
       {isProcessing ? <meta httpEquiv="refresh" content="5" /> : null}
-      <section className="border-b border-white/10 bg-[#0b1118]">
+      <section className="border-b border-white/10 bg-[linear-gradient(180deg,#1a2330_0%,#111820_100%)]">
         <div className="mx-auto w-full max-w-8xl px-4 py-6 sm:px-6 lg:px-8">
           <Link
             href="/"
@@ -243,43 +278,31 @@ export default async function ScanReportPage({
             <ArrowLeft className="h-4 w-4" />
             New scan
           </Link>
-          <div className="mt-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <p className="text-sm font-medium text-emerald-200">Scan Report</p>
-              <h1 className="mt-2 text-2xl font-semibold text-white">
-                {scan.project?.name ?? "Website scan"}
-              </h1>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
-                {scan.urls.length} URL{scan.urls.length === 1 ? "" : "s"} scanned.
-                {scan.project?.client?.name ? ` Client: ${scan.project.client.name}.` : ""}
-              </p>
-            </div>
-            <div
-              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-semibold ${statusStyles[scan.status]}`}
-            >
-              {scan.status === "COMPLETED" ? (
-                <CheckCircle2 className="h-4 w-4" />
-              ) : scan.status === "FAILED" ? (
-                <AlertTriangle className="h-4 w-4" />
-              ) : (
-                <Clock3 className="h-4 w-4" />
-              )}
-              {scan.status}
-            </div>
-          </div>
+          <ReportHero
+            projectName={scan.project?.name ?? "Website scan"}
+            clientName={scan.project?.client?.name}
+            urlCount={scan.urls.length}
+            status={scan.status}
+            previewUrl={previewUrl}
+            overallScore={overallScore}
+            attentionSummary={attentionSummary}
+            priorityFindings={priorityFindings}
+            clientDrivers={clientDrivers}
+            isProcessing={isProcessing}
+          />
           <RatingOverviewPanel ratings={sectionRatings} />
         </div>
       </section>
 
       <section className="mx-auto grid w-full max-w-8xl gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[280px_1fr] lg:px-8">
         <aside className="space-y-4">
-          <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
+          <div className="rounded-lg border border-white/10 bg-[#18212c] p-4">
             <h2 className="text-sm font-semibold text-white">Scanned URLs</h2>
             <div className="mt-4 space-y-3">
               {scan.urls.map((url) => (
                 <div
                   key={url.id}
-                  className="rounded-lg border border-white/10 bg-black/15 p-3"
+                  className="rounded-lg border border-white/10 bg-slate-800/35 p-3"
                 >
                   <div className="flex items-start gap-2">
                     <ExternalLink className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" />
@@ -293,7 +316,7 @@ export default async function ScanReportPage({
             </div>
           </div>
 
-          <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4 text-sm leading-6 text-slate-400">
+          <div className="rounded-lg border border-white/10 bg-[#18212c] p-4 text-sm leading-6 text-slate-400">
             <span className="font-semibold text-white">Current scan depth: </span>
             local baseline checks for website updates, SEO, ADA markup, speed
             signals, security headers, robots, and sitemap. WAVE and PageSpeed
@@ -319,12 +342,14 @@ export default async function ScanReportPage({
             </div>
           ) : null}
 
+          <ScanFailurePanel failedUrls={failedUrls} scanStatus={scan.status} />
+
           <WebsiteMetricsPanel metrics={websiteMetrics} />
 
           <PlatformSnapshotCards snapshot={platformSnapshot} />
 
           {scan.findings.length === 0 ? (
-            <div className="rounded-lg border border-white/10 bg-white/[0.04] p-5">
+            <div className="rounded-lg border border-white/10 bg-[#18212c] p-5">
               <h2 className="font-semibold text-white">No findings yet</h2>
               <p className="mt-2 text-sm leading-6 text-slate-400">
                 The scan record exists, but no findings have been saved yet.
@@ -353,6 +378,327 @@ export default async function ScanReportPage({
   );
 }
 
+function ReportHero({
+  projectName,
+  clientName,
+  urlCount,
+  status,
+  previewUrl,
+  overallScore,
+  attentionSummary,
+  priorityFindings,
+  clientDrivers,
+  isProcessing,
+}: {
+  projectName: string;
+  clientName?: string | null;
+  urlCount: number;
+  status: keyof typeof statusStyles;
+  previewUrl: string;
+  overallScore: number;
+  attentionSummary: Record<keyof typeof attentionConfig, number>;
+  priorityFindings: ReportFinding[];
+  clientDrivers: ClientUpdateDriver[];
+  isProcessing: boolean;
+}) {
+  const topFinding = priorityFindings[0];
+  const issueCount = Object.values(attentionSummary).reduce(
+    (total, count) => total + count,
+    0,
+  );
+  const previewExamples = getPreviewExamples(priorityFindings);
+
+  return (
+    <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_460px]">
+      <div className="rounded-lg border border-white/10 bg-[#18212c] p-5 shadow-xl shadow-slate-950/20">
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-medium text-emerald-200">Scan Report</p>
+              <div
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${statusStyles[status]}`}
+              >
+                {status === "COMPLETED" ? (
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                ) : status === "FAILED" ? (
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                ) : (
+                  <Clock3 className="h-3.5 w-3.5" />
+                )}
+                {status}
+              </div>
+            </div>
+            <h1 className="mt-3 text-3xl font-semibold text-white">{projectName}</h1>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
+              {urlCount} URL{urlCount === 1 ? "" : "s"} scanned.
+              {clientName ? ` Client: ${clientName}.` : ""} Start with the highest
+              attention items, then retest after updates.
+            </p>
+          </div>
+          <div className="flex items-center gap-4 rounded-lg border border-white/10 bg-slate-800/35 p-3">
+            <MiniScoreCircle
+              score={overallScore}
+              attention={getAttentionFromScore(overallScore)}
+            />
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Overall
+              </div>
+              <div className="mt-1 text-sm leading-5 text-slate-200">
+                {issueCount > 0
+                  ? `${issueCount} issue${issueCount === 1 ? "" : "s"} ranked by risk`
+                  : isProcessing
+                    ? "Scan is still collecting findings"
+                    : "No major issues found yet"}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-4">
+          {attentionOrder.map((attention) => (
+            <div
+              key={attention}
+              className={`rounded-lg border px-3 py-2 ${attentionConfig[attention].classes}`}
+            >
+              <div className="text-xl font-semibold">{attentionSummary[attention]}</div>
+              <div className="text-xs font-medium opacity-80">
+                {attentionConfig[attention].label} priority
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {clientDrivers.length > 0 ? (
+          <div className="mt-5 rounded-lg border border-white/10 bg-slate-800/30 p-4">
+            <div className="text-sm font-semibold text-white">
+              Reasons to approve the update
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {clientDrivers.map((driver) => (
+                <div key={driver.title} className={`rounded-lg border p-3 ${driver.classes}`}>
+                  <div className="text-xs font-semibold uppercase tracking-wide opacity-75">
+                    {driver.label}
+                  </div>
+                  <div className="mt-2 text-sm font-semibold text-white">
+                    {driver.title}
+                  </div>
+                  <p className="mt-2 text-xs leading-5 opacity-85">{driver.detail}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="mt-5 rounded-lg border border-white/10 bg-slate-800/30 p-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-white">
+            <ListChecks className="h-4 w-4 text-emerald-300" />
+            Major issues to update first
+          </div>
+
+          {priorityFindings.length > 0 ? (
+            <div className="mt-3 grid gap-3">
+              {priorityFindings.map((finding) => (
+                <article
+                  key={finding.id}
+                  className="rounded-lg border border-white/10 bg-[#202a36] p-4"
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        {categoryLabels[finding.category]}
+                      </div>
+                      <h2 className="mt-1 text-base font-semibold text-white">
+                        {finding.title}
+                      </h2>
+                    </div>
+                    <span
+                      className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-semibold ${severityStyles[finding.severity]}`}
+                    >
+                      {finding.severity}
+                    </span>
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-slate-300">
+                    {getFindingDescription(finding)}
+                  </p>
+                  <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                    {getFindingImpact(finding) ? (
+                      <div className="rounded-lg border border-sky-300/20 bg-sky-300/10 p-3">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-sky-200">
+                          Why it matters
+                        </div>
+                        <p className="mt-2 text-sm leading-6 text-sky-50">
+                          {getFindingImpact(finding)}
+                        </p>
+                      </div>
+                    ) : null}
+                    <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-emerald-200">
+                        What to update
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-emerald-50">
+                        {getFindingRecommendation(finding)}
+                      </p>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-3 rounded-lg border border-white/10 bg-[#202a36] p-4 text-sm leading-6 text-slate-300">
+              {isProcessing
+                ? "The scan is still running. Major issues will appear here as findings are saved."
+                : "No high-priority issues were saved for this scan."}
+            </div>
+          )}
+        </div>
+
+        {topFinding ? (
+          <p className="mt-4 text-sm leading-6 text-slate-400">
+            First focus: <span className="font-semibold text-white">{topFinding.title}</span>.
+            This is the clearest starting point because it has the highest current
+            attention level in the report.
+          </p>
+        ) : null}
+      </div>
+
+      <WebsitePreviewPanel
+        previewUrl={previewUrl}
+        previewExamples={previewExamples}
+      />
+    </div>
+  );
+}
+
+function ScanFailurePanel({
+  failedUrls,
+  scanStatus,
+}: {
+  failedUrls: FailedUrlSummary[];
+  scanStatus: keyof typeof statusStyles;
+}) {
+  if (failedUrls.length === 0) {
+    return null;
+  }
+
+  const title =
+    scanStatus === "FAILED" ? "Scan needs attention" : "Some URLs need attention";
+
+  return (
+    <section className="rounded-lg border border-red-300/25 bg-red-300/10 p-5 text-red-50">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-semibold text-red-100">
+            <AlertTriangle className="h-4 w-4" />
+            {title}
+          </div>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-red-50/80">
+            {failedUrls.length} URL{failedUrls.length === 1 ? "" : "s"} could not
+            finish cleanly. The technical details are logged on the server, while
+            this report shows the practical next step.
+          </p>
+        </div>
+        <div className="rounded-full border border-red-200/30 px-3 py-1 text-xs font-semibold text-red-100">
+          {failedUrls.length} failed
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3">
+        {failedUrls.map((url) => (
+          <div
+            key={url.id}
+            className="rounded-lg border border-red-200/20 bg-[#202a36] p-4"
+          >
+            <div className="break-words text-sm font-semibold text-white">
+              {url.url}
+            </div>
+            <p className="mt-2 text-sm leading-6 text-red-50/80">
+              {sanitizeScanFailureText(url.error)}
+            </p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function WebsitePreviewPanel({
+  previewUrl,
+  previewExamples,
+}: {
+  previewUrl: string;
+  previewExamples: string[];
+}) {
+  if (!previewUrl) {
+    return null;
+  }
+
+  return (
+    <aside className="rounded-lg border border-white/10 bg-[#18212c] p-4 shadow-xl shadow-slate-950/20">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-semibold text-white">
+            <Globe2 className="h-4 w-4 text-cyan-300" />
+            Website Preview
+          </div>
+          <p className="mt-1 break-words text-xs leading-5 text-slate-400">
+            {previewUrl}
+          </p>
+        </div>
+        <a
+          href={previewUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-slate-800/40 text-slate-200 transition hover:bg-slate-700/60"
+          aria-label="Open website in new tab"
+        >
+          <ExternalLink className="h-4 w-4" />
+        </a>
+      </div>
+
+      <div className="mt-4 overflow-hidden rounded-lg border border-white/10 bg-white">
+        <div className="flex h-8 items-center gap-1 border-b border-slate-200 bg-slate-100 px-3">
+          <span className="h-2.5 w-2.5 rounded-full bg-red-400" />
+          <span className="h-2.5 w-2.5 rounded-full bg-amber-400" />
+          <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
+        </div>
+        <div className="relative">
+          <iframe
+            title="Scanned website preview"
+            src={previewUrl}
+            className="h-[330px] w-full bg-white"
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            sandbox="allow-forms allow-popups allow-same-origin allow-scripts"
+          />
+          {previewExamples.length > 0 ? (
+            <div className="pointer-events-none absolute inset-x-3 bottom-3 rounded-lg border border-white/20 bg-[#18212c]/95 p-3 shadow-lg shadow-slate-950/30">
+              <div className="text-xs font-semibold uppercase tracking-wide text-cyan-200">
+                Examples from this scan
+              </div>
+              <div className="mt-2 space-y-1.5">
+                {previewExamples.slice(0, 3).map((example, index) => (
+                  <div
+                    key={`${example}-${index}`}
+                    className="truncate text-xs leading-5 text-slate-100"
+                  >
+                    {example}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <p className="mt-3 text-xs leading-5 text-slate-400">
+        Some websites block embeds with security headers. The report findings still
+        remain available below.
+      </p>
+    </aside>
+  );
+}
+
 function RatingOverviewPanel({ ratings }: { ratings: SectionRating[] }) {
   if (ratings.length === 0) {
     return null;
@@ -370,10 +716,10 @@ function RatingOverviewPanel({ ratings }: { ratings: SectionRating[] }) {
   const issueCount = ratings.reduce((total, rating) => total + rating.findingCount, 0);
 
   return (
-    <div className="mt-6 rounded-lg border border-white/10 bg-white/[0.04] p-4">
+    <div className="mt-5 rounded-lg border border-white/10 bg-[#18212c] p-4">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
             Report Ratings
           </div>
           <h2 className="mt-1 text-lg font-semibold text-white">
@@ -388,7 +734,7 @@ function RatingOverviewPanel({ ratings }: { ratings: SectionRating[] }) {
         {sortedRatings.map((rating) => (
           <div
             key={rating.category}
-            className="flex min-h-[156px] flex-col items-center justify-between rounded-lg border border-white/10 bg-black/20 p-3 text-center"
+            className="flex min-h-[156px] flex-col items-center justify-between rounded-lg border border-white/10 bg-slate-800/35 p-3 text-center"
           >
             <MiniScoreCircle score={rating.score} attention={rating.attention} />
             <div className="mt-3">
@@ -445,7 +791,7 @@ function SaveReportPanel({
         </form>
         <a
           href={`/api/scans/${scanId}/reports/pdf`}
-          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 text-sm font-semibold text-white transition hover:bg-white/10"
+          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-800/35 px-3 text-sm font-semibold text-white transition hover:bg-slate-700/50"
         >
           <Download className="h-4 w-4" />
           Download PDF
@@ -453,7 +799,7 @@ function SaveReportPanel({
       </div>
 
       {improvement !== null ? (
-        <div className="mt-4 rounded-lg border border-white/10 bg-black/20 p-3">
+        <div className="mt-4 rounded-lg border border-white/10 bg-slate-800/35 p-3">
           <div className="text-xs font-semibold uppercase tracking-wide text-emerald-200">
             Latest change
           </div>
@@ -478,7 +824,7 @@ function SaveReportPanel({
             return (
               <div
                 key={report.id}
-                className="rounded-lg border border-white/10 bg-black/20 p-1"
+                className="rounded-lg border border-white/10 bg-slate-800/35 p-1"
               >
                 <div className="flex items-start justify-between gap-1">
                   <div>
@@ -512,10 +858,10 @@ function WebsiteMetricsPanel({ metrics }: { metrics: WebsiteMetric[] }) {
   }
 
   return (
-    <section className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
+    <section className="rounded-lg border border-white/10 bg-[#18212c] p-4">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
             Website Metrics
           </div>
           <h2 className="mt-1 text-lg font-semibold text-white">
@@ -530,7 +876,7 @@ function WebsiteMetricsPanel({ metrics }: { metrics: WebsiteMetric[] }) {
             className={`rounded-lg border p-3 ${
               metric.status
                 ? platformStatusStyles[metric.status]
-                : "border-white/10 bg-black/20 text-slate-100"
+                : "border-white/10 bg-[#202a36] text-slate-100"
             }`}
           >
             <div className="text-xs font-semibold uppercase tracking-wide opacity-70">
@@ -595,9 +941,9 @@ function WebsiteUpdatesSection({
   const primaryAttention = getPrimaryAttention(findings);
 
   return (
-    <section className="overflow-hidden rounded-lg border border-emerald-300/20 bg-[#0f151d]">
+    <section className="overflow-hidden rounded-lg border border-emerald-300/20 bg-[#18212c]">
       <SectionTopBand attention={primaryAttention} />
-      <div className="border-b border-white/10 bg-white/[0.03] p-5">
+      <div className="border-b border-white/10 bg-[#202a36] p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold text-emerald-200">
@@ -667,7 +1013,7 @@ function WebsiteUpdatesSection({
             />
           </div>
 
-          <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
+          <div className="rounded-lg border border-white/10 bg-[#202a36] p-4">
             <h3 className="text-sm font-semibold text-white">Action Checklist</h3>
             <div className="mt-3 grid gap-2 md:grid-cols-2">
               {[
@@ -680,7 +1026,7 @@ function WebsiteUpdatesSection({
               ].map((item) => (
                 <div
                   key={item}
-                  className="flex gap-2 rounded-lg border border-white/10 bg-black/15 p-3 text-sm leading-6 text-slate-300"
+                  className="flex gap-2 rounded-lg border border-white/10 bg-slate-800/35 p-3 text-sm leading-6 text-slate-300"
                 >
                   <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
                   <span>{item}</span>
@@ -706,7 +1052,7 @@ function WebsiteUpdatesSection({
                 {evidence.examples.slice(0, 10).map((example, index) => (
                   <code
                     key={`${example}-${index}`}
-                    className="block overflow-hidden text-ellipsis rounded-md border border-white/10 bg-black/25 px-3 py-2 text-xs leading-5 text-cyan-100"
+                    className="block overflow-hidden text-ellipsis rounded-md border border-white/10 bg-slate-900/35 px-3 py-2 text-xs leading-5 text-cyan-100"
                   >
                     {example}
                   </code>
@@ -759,12 +1105,12 @@ function GenericFindingSection({
   const primaryAttention = getPrimaryAttention(findings);
 
   return (
-    <section className="overflow-hidden rounded-lg border border-white/10 bg-[#0f151d]">
+    <section className="overflow-hidden rounded-lg border border-white/10 bg-[#18212c]">
       <SectionTopBand attention={primaryAttention} />
-      <div className="border-b border-white/10 bg-white/[0.03] p-5">
+      <div className="border-b border-white/10 bg-[#202a36] p-5">
         <div className="grid gap-4 lg:grid-cols-[1fr_120px] lg:items-center">
           <div>
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
               {getCategoryContext(category)}
             </div>
             <h2 className="mt-2 text-2xl font-semibold text-white">
@@ -785,7 +1131,7 @@ function GenericFindingSection({
           renderFinding={(finding) => (
             <article
               key={finding.id}
-              className="rounded-lg border border-white/10 bg-white/[0.03] p-4"
+              className="rounded-lg border border-white/10 bg-[#202a36] p-4"
             >
               <FindingHeader finding={finding} />
               <RecommendationBlocks finding={finding} />
@@ -803,7 +1149,9 @@ function FindingHeader({ finding }: { finding: ReportFinding }) {
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div>
         <h3 className="font-semibold text-white">{finding.title}</h3>
-        <p className="mt-2 text-sm leading-6 text-slate-300">{finding.description}</p>
+        <p className="mt-2 text-sm leading-6 text-slate-300">
+          {getFindingDescription(finding)}
+        </p>
       </div>
       <span
         className={`inline-flex w-fit shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold ${severityStyles[finding.severity]}`}
@@ -847,10 +1195,10 @@ function ScoreRing({
         }}
         aria-label={`Section score ${score} percent`}
       >
-        <div className="grid h-full w-full place-items-center rounded-full bg-[#0f151d] text-center">
+        <div className="grid h-full w-full place-items-center rounded-full bg-[#18212c] text-center">
           <div>
             <div className="text-3xl font-semibold text-white">{score}</div>
-            <div className="text-xs font-medium text-slate-500">/ 100</div>
+            <div className="text-xs font-medium text-slate-400">/ 100</div>
           </div>
         </div>
       </div>
@@ -875,10 +1223,10 @@ function MiniScoreCircle({
       }}
       aria-label={`Section score ${score} percent`}
     >
-      <div className="grid h-full w-full place-items-center rounded-full bg-[#0f151d] text-center">
+      <div className="grid h-full w-full place-items-center rounded-full bg-[#18212c] text-center">
         <div>
           <div className="text-xl font-semibold text-white">{score}</div>
-          <div className="text-[10px] font-medium text-slate-500">/ 100</div>
+          <div className="text-[10px] font-medium text-slate-400">/ 100</div>
         </div>
       </div>
     </div>
@@ -939,7 +1287,7 @@ function UpdateFindingCard({ finding }: { finding: ReportFinding }) {
   const examples = getStringArrayFromEvidence(finding.evidence, "examples");
 
   return (
-    <article className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
+    <article className="rounded-lg border border-white/10 bg-[#202a36] p-4">
       <FindingHeader finding={finding} />
       <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_0.9fr]">
         <div className="space-y-3">
@@ -981,7 +1329,7 @@ function MetricCard({
     LOW: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
     EMERALD: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
     CYAN: "border-cyan-300/20 bg-cyan-300/10 text-cyan-100",
-    SLATE: "border-white/10 bg-white/[0.04] text-slate-100",
+    SLATE: "border-white/10 bg-[#202a36] text-slate-100",
   };
 
   return (
@@ -1002,7 +1350,7 @@ function UpdateSummaryCard({
   items: string[];
 }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
+    <div className="rounded-lg border border-white/10 bg-[#202a36] p-4">
       <div className="flex items-center gap-2 text-sm font-semibold text-white">
         <span className="text-emerald-300">{icon}</span>
         {label}
@@ -1027,7 +1375,7 @@ function EvidencePanel({
   children: ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
+    <div className="rounded-lg border border-white/10 bg-[#202a36] p-4">
       <h3 className="text-sm font-semibold text-white">{title}</h3>
       <div className="mt-3">{children}</div>
     </div>
@@ -1035,6 +1383,8 @@ function EvidencePanel({
 }
 
 function RecommendationBlocks({ finding }: { finding: ReportFinding }) {
+  const impact = getFindingImpact(finding);
+
   return (
     <div className="space-y-3">
       <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-3">
@@ -1042,15 +1392,15 @@ function RecommendationBlocks({ finding }: { finding: ReportFinding }) {
           Recommended fix
         </div>
         <p className="mt-2 text-sm leading-6 text-emerald-50">
-          {finding.recommendation ?? "Review this item during the maintenance check."}
+          {getFindingRecommendation(finding)}
         </p>
       </div>
-      {finding.impact ? (
+      {impact ? (
         <div className="rounded-lg border border-sky-300/20 bg-sky-300/10 p-3">
           <div className="text-xs font-semibold uppercase tracking-wide text-sky-200">
             Why it matters
           </div>
-          <p className="mt-2 text-sm leading-6 text-sky-50">{finding.impact}</p>
+          <p className="mt-2 text-sm leading-6 text-sky-50">{impact}</p>
         </div>
       ) : null}
     </div>
@@ -1070,7 +1420,7 @@ function EvidenceDetails({ finding }: { finding: ReportFinding }) {
   }
 
   return (
-    <div className="mt-3 rounded-lg border border-white/10 bg-black/20 p-3">
+    <div className="mt-3 rounded-lg border border-white/10 bg-slate-800/35 p-3">
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-300">
         Specific items found on this site
       </div>
@@ -1080,7 +1430,7 @@ function EvidenceDetails({ finding }: { finding: ReportFinding }) {
           {counts.slice(0, 6).map((count, index) => (
             <div
               key={`${count.label}-${count.value}-${index}`}
-              className="rounded-lg border border-white/10 bg-white/[0.04] p-3"
+              className="rounded-lg border border-white/10 bg-[#202a36] p-3"
             >
               <div className="text-lg font-semibold text-white">{count.value}</div>
               <div className="mt-1 text-xs leading-5 text-slate-400">{count.label}</div>
@@ -1107,7 +1457,7 @@ function EvidenceDetails({ finding }: { finding: ReportFinding }) {
           {examples.slice(0, 6).map((example, index) => (
             <code
               key={`${example}-${index}`}
-              className="block overflow-hidden text-ellipsis rounded-md border border-white/10 bg-[#070b10] px-3 py-2 text-xs leading-5 text-cyan-100"
+              className="block overflow-hidden text-ellipsis rounded-md border border-white/10 bg-[#111820] px-3 py-2 text-xs leading-5 text-cyan-100"
             >
               {example}
             </code>
@@ -1124,7 +1474,7 @@ function TagList({ items }: { items: string[] }) {
       {items.slice(0, 24).map((item) => (
         <span
           key={item}
-          className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-xs font-medium text-slate-200"
+          className="rounded-full border border-white/10 bg-slate-800/35 px-2.5 py-1 text-xs font-medium text-slate-200"
         >
           {item}
         </span>
@@ -1136,7 +1486,7 @@ function TagList({ items }: { items: string[] }) {
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="grid gap-1 border-b border-white/10 pb-2 last:border-0 last:pb-0">
-      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+      <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
         {label}
       </span>
       <span className="break-words text-slate-200">{value}</span>
@@ -1230,6 +1580,174 @@ function getPrimaryAttention(findings: ReportFinding[]) {
   );
 }
 
+function getPriorityFindings(findings: ReportFinding[]) {
+  const sortedFindings = sortFindingsByAttention(findings);
+  const actionableFindings = sortedFindings.filter(
+    (finding) => finding.severity !== "INFO",
+  );
+
+  return (actionableFindings.length > 0 ? actionableFindings : sortedFindings).slice(
+    0,
+    3,
+  );
+}
+
+function getOverallScore(ratings: SectionRating[]) {
+  const activeRatings = ratings.filter((rating) => rating.findingCount > 0);
+
+  if (activeRatings.length === 0) {
+    return 100;
+  }
+
+  return Math.round(
+    activeRatings.reduce((total, rating) => total + rating.score, 0) /
+      activeRatings.length,
+  );
+}
+
+function getAttentionFromScore(score: number): keyof typeof attentionConfig {
+  if (score < 50) {
+    return "URGENT";
+  }
+
+  if (score < 70) {
+    return "HIGH";
+  }
+
+  if (score < 90) {
+    return "MEDIUM";
+  }
+
+  return "LOW";
+}
+
+function getPreviewExamples(findings: ReportFinding[]) {
+  const evidenceExamples = findings.flatMap((finding) =>
+    getStringArrayFromEvidence(finding.evidence, "examples").map((example) =>
+      shortUrl(example),
+    ),
+  );
+  const findingExamples = findings.map(
+    (finding) => `${categoryLabels[finding.category]}: ${finding.title}`,
+  );
+
+  return Array.from(new Set([...evidenceExamples, ...findingExamples])).slice(0, 4);
+}
+
+function getClientUpdateDrivers(findings: ReportFinding[]): ClientUpdateDriver[] {
+  const highPriorityCount = findings.filter((finding) =>
+    ["CRITICAL", "HIGH"].includes(finding.severity),
+  ).length;
+  const publicAccessibilityContext = getPublicAccessibilityContext(findings);
+  const actionableAdaIssueCount = findings.filter(
+    (finding) =>
+      finding.category === "ADA" &&
+      finding.severity !== "INFO" &&
+      finding.title !== "Public-sector or school accessibility context detected",
+  ).length;
+  const updateCount = countFindingsInCategory(findings, "WEBSITE_UPDATES");
+  const functionalityCount = countFindingsInCategory(findings, "FUNCTIONALITY");
+  const aiCount = countFindingsInCategory(findings, "AI_OPPORTUNITIES");
+  const trustCount =
+    countFindingsInCategory(findings, "ADA") +
+    countFindingsInCategory(findings, "SEO") +
+    countFindingsInCategory(findings, "SPEED") +
+    countFindingsInCategory(findings, "SECURITY");
+  const drivers: ClientUpdateDriver[] = [];
+
+  if (publicAccessibilityContext && actionableAdaIssueCount > 0) {
+    drivers.push({
+      label: "ADA risk",
+      title: "Lead with accessibility for this site",
+      detail: `${publicAccessibilityContext.label} signals were detected and ${actionableAdaIssueCount} ADA issue${actionableAdaIssueCount === 1 ? "" : "s"} need attention. This is a stronger approval reason for government or school-related work.`,
+      classes: "border-red-300/25 bg-red-300/10 text-red-100",
+    });
+  }
+
+  if (highPriorityCount > 0) {
+    drivers.push({
+      label: "Risk",
+      title: "Fix the highest-risk items first",
+      detail: `${highPriorityCount} high-priority item${highPriorityCount === 1 ? "" : "s"} can be used to explain why waiting may cost more later.`,
+      classes: "border-red-300/25 bg-red-300/10 text-red-100",
+    });
+  }
+
+  if (functionalityCount > 0) {
+    drivers.push({
+      label: "Leads",
+      title: "Reduce lost calls, forms, and bookings",
+      detail: "Functionality findings make the update easier to justify because they connect directly to customer actions.",
+      classes: "border-cyan-300/25 bg-cyan-300/10 text-cyan-100",
+    });
+  }
+
+  if (aiCount > 0) {
+    drivers.push({
+      label: "Time",
+      title: "Use AI to save staff follow-up time",
+      detail: "AI opportunities turn the update into an automation project, not only a maintenance expense.",
+      classes: "border-violet-300/25 bg-violet-300/10 text-violet-100",
+    });
+  }
+
+  if (trustCount > 0) {
+    drivers.push({
+      label: "Trust",
+      title: "Improve search, speed, ADA, and credibility",
+      detail: "These updates help customers and search engines trust the site before they contact the business.",
+      classes: "border-emerald-300/25 bg-emerald-300/10 text-emerald-100",
+    });
+  }
+
+  if (updateCount > 0 || drivers.length === 0) {
+    drivers.push({
+      label: "Maintenance",
+      title: "Show a clear update path",
+      detail: "The report gives the client a practical checklist instead of a vague recommendation to modernize.",
+      classes: "border-amber-300/25 bg-amber-300/10 text-amber-100",
+    });
+  }
+
+  return drivers.slice(0, 4);
+}
+
+function countFindingsInCategory(
+  findings: ReportFinding[],
+  category: keyof typeof categoryLabels,
+) {
+  return findings.filter((finding) => finding.category === category).length;
+}
+
+function getPublicAccessibilityContext(findings: ReportFinding[]) {
+  const contextFinding = findings.find((finding) => {
+    if (!isRecord(finding.evidence)) {
+      return false;
+    }
+
+    return isRecord(finding.evidence.publicServiceContext);
+  });
+
+  if (!contextFinding || !isRecord(contextFinding.evidence)) {
+    return null;
+  }
+
+  const context = contextFinding.evidence.publicServiceContext;
+
+  if (!isRecord(context)) {
+    return null;
+  }
+
+  const label = context.label;
+  const level = context.level;
+
+  if (typeof label !== "string" || typeof level !== "string") {
+    return null;
+  }
+
+  return { label, level };
+}
+
 function getSectionScore(findings: ReportFinding[]) {
   const penalty = findings.reduce((total, finding) => {
     return total + severityWeight(finding.severity);
@@ -1254,6 +1772,7 @@ function getCategoryContext(category: keyof typeof categoryLabels) {
   const contexts = {
     WEBSITE_UPDATES: "Maintenance",
     FUNCTIONALITY: "Forms, email, and client actions",
+    AI_OPPORTUNITIES: "Automation and staff time",
     ADA: "Accessibility",
     SPEED: "Performance",
     SEO: "Search visibility",
@@ -1272,11 +1791,21 @@ function getCategorySummary(
   const topAttention = attentionConfig[getPrimaryAttention(findings)].label;
   const count = findings.length;
   const plural = count === 1 ? "finding" : "findings";
+  const publicAccessibilityContext =
+    category === "ADA" ? getPublicAccessibilityContext(findings) : null;
+  const actionableAdaIssueCount = findings.filter(
+    (finding) =>
+      finding.category === "ADA" &&
+      finding.severity !== "INFO" &&
+      finding.title !== "Public-sector or school accessibility context detected",
+  ).length;
   const summaries = {
     WEBSITE_UPDATES:
       "Maintenance clues from public source, headers, and CMS asset paths.",
     FUNCTIONALITY:
       "Public checks for contact forms, email DNS readiness, mail links, broken CTAs, and common client-action issues.",
+    AI_OPPORTUNITIES:
+      "Chatbot, AI assistant, lead intake, booking, FAQ, and support automation opportunities that can save client time.",
     ADA: "Accessibility issues and baseline checks that can affect visitors using assistive technology.",
     SPEED:
       "Performance signals from visible page weight, scripts, styles, and image usage.",
@@ -1288,7 +1817,49 @@ function getCategorySummary(
     OTHER: "Additional scanner findings that do not fit the main report groups.",
   };
 
+  if (publicAccessibilityContext && actionableAdaIssueCount > 0) {
+    return `${summaries[category]} ${publicAccessibilityContext.label} signals were detected, so these ADA issues should be positioned as priority compliance and access fixes. ${count} ${plural}; highest attention level: ${topAttention}.`;
+  }
+
   return `${summaries[category]} ${count} ${plural}; highest attention level: ${topAttention}.`;
+}
+
+function getFindingDescription(finding: ReportFinding) {
+  const failure = getStoredScanFailure(finding);
+
+  if (failure) {
+    return failure.message;
+  }
+
+  return finding.title === "Scan failed"
+    ? sanitizeScanFailureText(finding.description)
+    : finding.description;
+}
+
+function getFindingImpact(finding: ReportFinding) {
+  return getStoredScanFailure(finding)?.impact ?? finding.impact;
+}
+
+function getFindingRecommendation(finding: ReportFinding) {
+  return (
+    getStoredScanFailure(finding)?.recommendation ??
+    finding.recommendation ??
+    "Review this item during the maintenance check."
+  );
+}
+
+function getStoredScanFailure(finding: ReportFinding) {
+  if (finding.title !== "Scan failed" || !hasInternalErrorSignature(finding.description)) {
+    return null;
+  }
+
+  return getScanFailurePresentation(new Error(finding.description));
+}
+
+function hasInternalErrorSignature(message: string) {
+  return /__TURBOPACK__|Prisma|createMany|invocation|Expected FindingCategory|invalid input value|\.next\/dev/i.test(
+    message,
+  );
 }
 
 function getStringArrayFromEvidence(evidence: unknown, key: string) {

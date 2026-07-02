@@ -1,0 +1,1 @@
+ALTER TYPE "FindingCategory" ADD VALUE 'AI_OPPORTUNITIES';

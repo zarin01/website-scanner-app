@@ -63,6 +63,14 @@ export const technicalScanner: ScannerAdapter = {
     const assetCount = imageTags.length + scriptTags.length + stylesheetTags.length;
     const htmlSizeKb = Math.round(Buffer.byteLength(html, "utf8") / 1024);
     const domNodeCount = html.match(/<[a-z][\w:-]*(?:\s|>)/gi)?.length ?? 0;
+    const publicServiceContext = getPublicServiceContext({
+      html,
+      title,
+      metaDescription,
+      url: parsedUrl,
+    });
+    const baselineAdaIssueCount =
+      missingAltCount + missingLabelCount + emptyLinkCount;
     const [supportFiles, latestWordPressVersion, pluginUpdateSignals] =
       await Promise.all([
         getSupportFileSignals(origin),
@@ -420,6 +428,32 @@ export const technicalScanner: ScannerAdapter = {
       });
     }
 
+    if (publicServiceContext) {
+      findings.push({
+        category: "ADA",
+        severity: "INFO",
+        title: "Public-sector or school accessibility context detected",
+        description: `${publicServiceContext.label} signals were found for this website.`,
+        impact:
+          "Government and public education websites have higher accessibility expectations. DOJ guidance for Title II covers state and local governments, including public schools, community colleges, and public universities; federal agency ICT is covered by Section 508.",
+        recommendation:
+          "Treat ADA findings as a priority. Confirm the site's exact obligations, then target WCAG 2.1 Level AA for state/local/public school content and Section 508 requirements for federal agency work.",
+        evidence: {
+          publicServiceContext,
+          counts: [
+            { label: "Public-sector signals", value: publicServiceContext.signals.length },
+            { label: "Baseline ADA issues", value: baselineAdaIssueCount },
+          ],
+          examples: publicServiceContext.signals.slice(0, 8),
+          authoritySources: [
+            "https://www.ada.gov/resources/2024-03-08-web-rule/",
+            "https://www.section508.gov/manage/laws-and-policies/",
+          ],
+        },
+        source: "technical-baseline",
+      });
+    }
+
     if (missingAltCount > 0) {
       findings.push({
         category: "ADA",
@@ -476,6 +510,41 @@ export const technicalScanner: ScannerAdapter = {
           emptyLinkCount,
           examples: emptyLinkExamples.slice(0, 8),
           counts: [{ label: "Links without accessible text", value: emptyLinkCount }],
+        },
+        source: "technical-baseline",
+      });
+    }
+
+    if (publicServiceContext && baselineAdaIssueCount > 0) {
+      findings.push({
+        category: "ADA",
+        severity:
+          publicServiceContext.level === "federal" || baselineAdaIssueCount >= 10
+            ? "CRITICAL"
+            : "HIGH",
+        title: "Public-sector ADA issues should be prioritized",
+        description: `${publicServiceContext.label} signals were detected, and baseline accessibility checks found ${baselineAdaIssueCount} issue${baselineAdaIssueCount === 1 ? "" : "s"}.`,
+        impact:
+          "Accessibility barriers on government or school-related websites can block access to public services, school information, forms, meetings, and community programs. They can also increase complaint, compliance, and lawsuit risk.",
+        recommendation:
+          "Lead the client conversation with ADA remediation. Fix public-facing templates, forms, navigation, documents, and media first, then validate with WAVE, axe, keyboard testing, and screen-reader spot checks.",
+        evidence: {
+          publicServiceContext,
+          counts: [
+            { label: "Images missing alt text", value: missingAltCount },
+            { label: "Controls missing labels", value: missingLabelCount },
+            { label: "Links without accessible text", value: emptyLinkCount },
+          ],
+          examples: [
+            ...publicServiceContext.signals.slice(0, 4),
+            ...missingAltImages.slice(0, 3).map(summarizeHtml),
+            ...missingLabelControls.slice(0, 3).map(summarizeHtml),
+            ...emptyLinkExamples.slice(0, 3),
+          ],
+          authoritySources: [
+            "https://www.ada.gov/resources/2024-03-08-web-rule/",
+            "https://www.section508.gov/manage/laws-and-policies/",
+          ],
         },
         source: "technical-baseline",
       });
@@ -702,6 +771,87 @@ function uniqueValues(values: string[]) {
     .filter(Boolean)
     .filter((value, index, allValues) => allValues.indexOf(value) === index)
     .slice(0, 50);
+}
+
+type PublicServiceContext = {
+  level: "federal" | "government" | "education";
+  label: string;
+  signals: string[];
+};
+
+function getPublicServiceContext({
+  html,
+  title,
+  metaDescription,
+  url,
+}: {
+  html: string;
+  title?: string;
+  metaDescription?: string;
+  url: URL;
+}): PublicServiceContext | null {
+  const hostname = url.hostname.replace(/^www\./i, "").toLowerCase();
+  const documentText = cleanText(`${title ?? ""} ${metaDescription ?? ""} ${html.slice(0, 60000)}`)
+    ?.toLowerCase() ?? "";
+  const signals: string[] = [];
+  let level: PublicServiceContext["level"] | undefined;
+
+  const addSignal = (nextLevel: PublicServiceContext["level"], signal: string) => {
+    signals.push(signal);
+
+    if (
+      !level ||
+      nextLevel === "federal" ||
+      (nextLevel === "government" && level === "education")
+    ) {
+      level = nextLevel;
+    }
+  };
+
+  if (hostname.endsWith(".mil")) {
+    addSignal("federal", "Domain uses .mil, a U.S. military domain.");
+  }
+
+  if (hostname.endsWith(".gov")) {
+    addSignal("government", "Domain uses .gov, an official U.S. government domain.");
+  }
+
+  if (hostname.endsWith(".edu")) {
+    addSignal("education", "Domain uses .edu, an education domain.");
+  }
+
+  if (/\b(k12|isd|cisd|usd|schools?|schooldistrict|district|board-of-education)\b/i.test(hostname)) {
+    addSignal("education", `School-related domain pattern: ${hostname}.`);
+  }
+
+  if (/\b(federal|united states|u\.s\. department|national archives|social security|veterans affairs)\b/i.test(documentText)) {
+    addSignal("federal", "Federal agency wording appears on the page.");
+  }
+
+  if (/\b(city of|county|township|municipal|state of|department of|public works|city council|board of commissioners|sheriff|police department|fire department|public library|parks and recreation|elections office|public health|state court|district court)\b/i.test(documentText)) {
+    addSignal("government", "State or local government wording appears on the page.");
+  }
+
+  if (/\b(public schools?|school district|independent school district|board of education|elementary school|middle school|high school|community college|public university|students and parents|student portal|campus)\b/i.test(documentText)) {
+    addSignal("education", "School or public education wording appears on the page.");
+  }
+
+  const uniqueSignals = uniqueValues(signals);
+
+  if (!level || uniqueSignals.length === 0) {
+    return null;
+  }
+
+  return {
+    level,
+    label:
+      level === "federal"
+        ? "Federal government"
+        : level === "government"
+          ? "Government/public entity"
+          : "School/education",
+    signals: uniqueSignals,
+  };
 }
 
 function extractWordPressAssets(html: string, type: "plugins" | "themes") {

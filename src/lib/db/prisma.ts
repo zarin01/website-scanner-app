@@ -5,6 +5,8 @@ const globalForPrisma = globalThis as unknown as {
   prisma?: PrismaClient;
 };
 
+const shouldLogQueries = process.env.PRISMA_QUERY_LOGS === "true";
+
 const adapter = new PrismaPg(
   process.env.DATABASE_URL ??
     "postgresql://scanner:scanner@localhost:55432/website_scanner?schema=public",
@@ -16,7 +18,9 @@ export const prisma =
     adapter,
     log:
       process.env.NODE_ENV === "development"
-        ? ["query", "error", "warn"]
+        ? shouldLogQueries
+          ? ["query", "error", "warn"]
+          : ["error", "warn"]
         : ["error"],
   });
 

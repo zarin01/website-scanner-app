@@ -63,7 +63,7 @@ export function ScanLauncher() {
     <form
       onSubmit={submitScan}
       aria-busy={isSubmitting}
-      className="relative overflow-hidden rounded-lg border border-white/10 bg-[#111821]/90 p-5 shadow-2xl shadow-black/30 backdrop-blur sm:p-6"
+      className="relative overflow-hidden rounded-lg border border-white/10 bg-[#1a2330]/95 p-5 shadow-2xl shadow-slate-950/25 backdrop-blur sm:p-6"
     >
       {isSubmitting ? (
         <div className="absolute inset-x-0 top-0 h-1 bg-emerald-400/15">
@@ -71,7 +71,7 @@ export function ScanLauncher() {
         </div>
       ) : null}
 
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex items-start justify-between gap-4">
         <div className="flex gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-emerald-400 text-slate-950">
             <Globe2 className="h-5 w-5" />
@@ -95,9 +95,9 @@ export function ScanLauncher() {
         id="urls"
         value={urls}
         onChange={(event) => setUrls(event.target.value)}
-        placeholder="example.com&#10;clientsite.com/about&#10;clientsite.com/contact"
+        placeholder={"example.com\nclientsite.com/about\nclientsite.com/contact"}
         disabled={isSubmitting}
-        className="mt-2 min-h-40 w-full rounded-lg border border-emerald-300/30 bg-[#070b10] px-4 py-4 text-base text-white outline-none transition placeholder:text-slate-600 focus:border-emerald-300 focus:ring-4 focus:ring-emerald-400/15 disabled:cursor-wait disabled:border-emerald-300/20 disabled:text-slate-400"
+        className="mt-2 min-h-40 w-full rounded-lg border border-emerald-300/30 bg-[#111820] px-4 py-4 text-base text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-300 focus:ring-4 focus:ring-emerald-400/15 disabled:cursor-wait disabled:border-emerald-300/20 disabled:text-slate-400"
         required
       />
 
@@ -115,7 +115,7 @@ export function ScanLauncher() {
             onChange={(event) => setProjectName(event.target.value)}
             placeholder="Monthly client audit"
             disabled={isSubmitting}
-            className="mt-2 h-11 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-emerald-300 focus:ring-4 focus:ring-emerald-400/10 disabled:cursor-wait disabled:text-slate-400"
+            className="mt-2 h-11 w-full rounded-lg border border-white/10 bg-[#202a36] px-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-300 focus:ring-4 focus:ring-emerald-400/10 disabled:cursor-wait disabled:text-slate-400"
           />
         </div>
         <div>
@@ -131,13 +131,13 @@ export function ScanLauncher() {
             onChange={(event) => setClientName(event.target.value)}
             placeholder="Client name"
             disabled={isSubmitting}
-            className="mt-2 h-11 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-emerald-300 focus:ring-4 focus:ring-emerald-400/10 disabled:cursor-wait disabled:text-slate-400"
+            className="mt-2 h-11 w-full rounded-lg border border-white/10 bg-[#202a36] px-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-300 focus:ring-4 focus:ring-emerald-400/10 disabled:cursor-wait disabled:text-slate-400"
           />
         </div>
       </div>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_140px]">
-        <label className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-slate-300">
+        <label className="flex items-center gap-3 rounded-lg border border-white/10 bg-[#202a36] px-3 py-2 text-sm text-slate-300">
           <input
             type="checkbox"
             checked={includeSubpages}
@@ -160,7 +160,7 @@ export function ScanLauncher() {
             value={maxPages}
             onChange={(event) => setMaxPages(Number(event.target.value))}
             disabled={isSubmitting}
-            className="h-10 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 text-sm text-white outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-400/10 disabled:cursor-wait disabled:text-slate-400"
+            className="h-10 w-full rounded-lg border border-white/10 bg-[#202a36] px-3 text-sm text-white outline-none transition focus:border-emerald-300 focus:ring-4 focus:ring-emerald-400/10 disabled:cursor-wait disabled:text-slate-400"
           />
         </div>
       </div>
