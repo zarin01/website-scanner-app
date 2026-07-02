@@ -7,6 +7,7 @@ const WORDPRESS_API_TIMEOUT_MS = 7000;
 export const technicalScanner: ScannerAdapter = {
   name: "technical-baseline",
   async run({ url }) {
+    const startedAt = Date.now();
     const response = await fetch(url, {
       redirect: "follow",
       signal: AbortSignal.timeout(PAGE_TIMEOUT_MS),
@@ -16,6 +17,7 @@ export const technicalScanner: ScannerAdapter = {
     });
 
     const html = await response.text();
+    const responseTimeMs = Date.now() - startedAt;
     const findings: ScannerFinding[] = [];
     const server = response.headers.get("server");
     const poweredBy = response.headers.get("x-powered-by");
@@ -136,8 +138,10 @@ export const technicalScanner: ScannerAdapter = {
           finalUrl,
           server,
           poweredBy,
+          title,
           htmlSizeKb,
           domNodeCount,
+          responseTimeMs,
         },
       source: "technical-baseline",
     });
@@ -548,6 +552,7 @@ export const technicalScanner: ScannerAdapter = {
           assetCount,
           htmlSizeKb,
           domNodeCount,
+          responseTimeMs,
           counts: [
             { label: "Images", value: imageTags.length },
             { label: "Scripts", value: scriptTags.length },
@@ -580,6 +585,7 @@ export const technicalScanner: ScannerAdapter = {
           assetCount,
           htmlSizeKb,
           domNodeCount,
+          responseTimeMs,
           counts: [
             { label: "Images", value: imageTags.length },
             { label: "Scripts", value: scriptTags.length },

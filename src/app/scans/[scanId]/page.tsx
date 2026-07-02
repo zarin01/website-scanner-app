@@ -88,6 +88,7 @@ const platformStatusStyles = {
 
 type ReportFinding = {
   id: string;
+  category: keyof typeof categoryLabels;
   severity: keyof typeof severityStyles;
   title: string;
   description: string;
@@ -121,6 +122,20 @@ type PlatformCard = {
 };
 
 type PlatformSnapshot = PlatformCard[];
+
+type WebsiteMetric = {
+  label: string;
+  value: string;
+  detail?: string;
+  status?: PlatformStatus;
+};
+
+type SectionRating = {
+  category: keyof typeof categoryLabels;
+  score: number;
+  findingCount: number;
+  attention: keyof typeof attentionConfig;
+};
 
 export default async function ScanReportPage({
   params,
@@ -204,6 +219,17 @@ export default async function ScanReportPage({
 
   const isProcessing = scan.status === "QUEUED" || scan.status === "RUNNING";
   const platformSnapshot = getPlatformSnapshot(scan.findings);
+  const websiteMetrics = getWebsiteMetrics(scan.findings);
+  const sectionRatings = categoryOrder.map((category) => {
+    const findings = groupedFindings[category] ?? [];
+
+    return {
+      category,
+      score: getSectionScore(findings),
+      findingCount: findings.length,
+      attention: getPrimaryAttention(findings),
+    };
+  });
 
   return (
     <main className="min-h-screen bg-[#070b10] text-slate-100">
@@ -241,6 +267,7 @@ export default async function ScanReportPage({
               {scan.status}
             </div>
           </div>
+          <RatingOverviewPanel ratings={sectionRatings} />
         </div>
       </section>
 
@@ -292,6 +319,8 @@ export default async function ScanReportPage({
             </div>
           ) : null}
 
+          <WebsiteMetricsPanel metrics={websiteMetrics} />
+
           <PlatformSnapshotCards snapshot={platformSnapshot} />
 
           {scan.findings.length === 0 ? (
@@ -321,6 +350,63 @@ export default async function ScanReportPage({
         </div>
       </section>
     </main>
+  );
+}
+
+function RatingOverviewPanel({ ratings }: { ratings: SectionRating[] }) {
+  if (ratings.length === 0) {
+    return null;
+  }
+
+  const sortedRatings = [...ratings].sort((first, second) => {
+    const scoreDifference = first.score - second.score;
+
+    if (scoreDifference !== 0) {
+      return scoreDifference;
+    }
+
+    return categoryOrder.indexOf(first.category) - categoryOrder.indexOf(second.category);
+  });
+  const issueCount = ratings.reduce((total, rating) => total + rating.findingCount, 0);
+
+  return (
+    <div className="mt-6 rounded-lg border border-white/10 bg-white/[0.04] p-4">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Report Ratings
+          </div>
+          <h2 className="mt-1 text-lg font-semibold text-white">
+            Scores by section, worst to best
+          </h2>
+        </div>
+        <div className="text-sm text-slate-400">
+          {issueCount} issue{issueCount === 1 ? "" : "s"} found
+        </div>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-8">
+        {sortedRatings.map((rating) => (
+          <div
+            key={rating.category}
+            className="flex min-h-[156px] flex-col items-center justify-between rounded-lg border border-white/10 bg-black/20 p-3 text-center"
+          >
+            <MiniScoreCircle score={rating.score} attention={rating.attention} />
+            <div className="mt-3">
+              <div className="text-sm font-semibold leading-5 text-white">
+                {categoryLabels[rating.category]}
+              </div>
+              <div
+                className={`mt-2 rounded-full border px-2.5 py-1 text-xs font-semibold ${attentionConfig[rating.attention].classes}`}
+              >
+                {rating.findingCount > 0
+                  ? `${rating.findingCount} issue${rating.findingCount === 1 ? "" : "s"}`
+                  : "No issues"}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -417,6 +503,49 @@ function SaveReportPanel({
         )}
       </div>
     </div>
+  );
+}
+
+function WebsiteMetricsPanel({ metrics }: { metrics: WebsiteMetric[] }) {
+  if (metrics.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Website Metrics
+          </div>
+          <h2 className="mt-1 text-lg font-semibold text-white">
+            Basic information found during the scan
+          </h2>
+        </div>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {metrics.map((metric) => (
+          <div
+            key={metric.label}
+            className={`rounded-lg border p-3 ${
+              metric.status
+                ? platformStatusStyles[metric.status]
+                : "border-white/10 bg-black/20 text-slate-100"
+            }`}
+          >
+            <div className="text-xs font-semibold uppercase tracking-wide opacity-70">
+              {metric.label}
+            </div>
+            <div className="mt-2 break-words text-lg font-semibold text-white">
+              {metric.value}
+            </div>
+            {metric.detail ? (
+              <p className="mt-1 text-xs leading-5 opacity-75">{metric.detail}</p>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -723,6 +852,33 @@ function ScoreRing({
             <div className="text-3xl font-semibold text-white">{score}</div>
             <div className="text-xs font-medium text-slate-500">/ 100</div>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MiniScoreCircle({
+  score,
+  attention,
+}: {
+  score: number;
+  attention: keyof typeof attentionConfig;
+}) {
+  const color = attentionConfig[attention].color;
+
+  return (
+    <div
+      className="grid h-20 w-20 place-items-center rounded-full p-1"
+      style={{
+        background: `conic-gradient(${color} ${score * 3.6}deg, rgba(255,255,255,0.12) 0deg)`,
+      }}
+      aria-label={`Section score ${score} percent`}
+    >
+      <div className="grid h-full w-full place-items-center rounded-full bg-[#0f151d] text-center">
+        <div>
+          <div className="text-xl font-semibold text-white">{score}</div>
+          <div className="text-[10px] font-medium text-slate-500">/ 100</div>
         </div>
       </div>
     </div>
@@ -1233,6 +1389,163 @@ function getPlatformSnapshot(findings: ReportFinding[]): PlatformSnapshot {
   ].filter((card): card is PlatformCard => Boolean(card));
 }
 
+function getWebsiteMetrics(findings: ReportFinding[]): WebsiteMetric[] {
+  const metrics: WebsiteMetric[] = [];
+  const responseFinding = findings.find(
+    (finding) => finding.source === "technical-baseline" && finding.title === "Page response captured",
+  );
+  const responseEvidence = isRecord(responseFinding?.evidence)
+    ? responseFinding.evidence
+    : undefined;
+  const status = getNumberFromEvidence(responseEvidence, "status");
+  const finalUrl = getStringFromEvidence(responseEvidence, "finalUrl");
+  const htmlSizeKb = getNumberFromEvidence(responseEvidence, "htmlSizeKb");
+  const responseTimeMs = getNumberFromEvidence(responseEvidence, "responseTimeMs");
+  const speedFinding = findings.find(
+    (finding) => finding.source === "technical-baseline" && finding.category === "SPEED",
+  );
+  const speedEvidence = isRecord(speedFinding?.evidence) ? speedFinding.evidence : undefined;
+  const imageCount = getNumberFromEvidence(speedEvidence, "imageCount");
+  const scriptCount = getNumberFromEvidence(speedEvidence, "scriptCount");
+  const stylesheetCount = getNumberFromEvidence(speedEvidence, "stylesheetCount");
+  const performanceScore = getLighthouseScore(findings, "Lighthouse Performance score");
+  const seoScore = getLighthouseScore(findings, "Lighthouse SEO score");
+  const accessibilityScore = getLighthouseScore(findings, "Lighthouse Accessibility score");
+  const bestPracticesScore = getLighthouseScore(findings, "Lighthouse Best Practices score");
+  const fcp = getLighthouseDisplayValue(findings, "first-contentful-paint");
+  const lcp = getLighthouseDisplayValue(findings, "largest-contentful-paint");
+  const pageTitle = getStringFromEvidence(
+    findings.find((finding) => finding.title === "Page title length should be reviewed")
+      ?.evidence,
+    "title",
+  );
+  const sitemapFinding = findings.find((finding) => finding.title === "Sitemap not found");
+  const robotsFinding = findings.find((finding) => finding.title === "robots.txt not found");
+  const noindexFinding = findings.find((finding) => finding.title === "Page has noindex directive");
+
+  if (status !== undefined) {
+    metrics.push({
+      label: "HTTP Status",
+      value: String(status),
+      detail: finalUrl ? shortUrl(finalUrl) : undefined,
+      status: status >= 200 && status < 400 ? "pass" : "fail",
+    });
+  }
+
+  if (responseTimeMs !== undefined) {
+    metrics.push({
+      label: "HTML Response",
+      value: formatMilliseconds(responseTimeMs),
+      detail: "Time to fetch the page HTML",
+      status: responseTimeMs < 1000 ? "pass" : responseTimeMs < 2500 ? "warn" : "fail",
+    });
+  }
+
+  if (performanceScore !== undefined || fcp || lcp) {
+    metrics.push({
+      label: "Page Load Speed",
+      value:
+        performanceScore !== undefined
+          ? `${performanceScore}/100`
+          : fcp ?? lcp ?? "Measured",
+      detail: [fcp ? `FCP ${fcp}` : "", lcp ? `LCP ${lcp}` : ""]
+        .filter(Boolean)
+        .join(" • "),
+      status:
+        performanceScore === undefined
+          ? undefined
+          : performanceScore >= 90
+            ? "pass"
+            : performanceScore >= 50
+              ? "warn"
+              : "fail",
+    });
+  }
+
+  metrics.push({
+    label: "Crawlable",
+    value: noindexFinding || (status !== undefined && status >= 400) ? "Needs Review" : "Likely Yes",
+    detail: noindexFinding
+      ? "Noindex directive found"
+      : status !== undefined && status >= 400
+        ? `HTTP ${status} may block crawlers`
+        : "No public noindex issue found",
+    status: noindexFinding || (status !== undefined && status >= 400) ? "fail" : "pass",
+  });
+
+  metrics.push({
+    label: "Robots / Sitemap",
+    value: sitemapFinding || robotsFinding ? "Review" : "Found",
+    detail: [
+      robotsFinding ? "robots.txt missing" : "robots.txt ok",
+      sitemapFinding ? "sitemap missing" : "sitemap ok",
+    ].join(" • "),
+    status: sitemapFinding ? "warn" : robotsFinding ? "warn" : "pass",
+  });
+
+  if (seoScore !== undefined || accessibilityScore !== undefined || bestPracticesScore !== undefined) {
+    metrics.push({
+      label: "Lighthouse Scores",
+      value: [
+        seoScore !== undefined ? `SEO ${seoScore}` : "",
+        accessibilityScore !== undefined ? `ADA ${accessibilityScore}` : "",
+        bestPracticesScore !== undefined ? `BP ${bestPracticesScore}` : "",
+      ]
+        .filter(Boolean)
+        .join(" / "),
+      detail: "SEO, accessibility, and best practices",
+    });
+  }
+
+  if (htmlSizeKb !== undefined) {
+    metrics.push({
+      label: "Page Size",
+      value: `${htmlSizeKb} KB`,
+      detail: "HTML size only",
+      status: htmlSizeKb < 250 ? "pass" : htmlSizeKb < 500 ? "warn" : "fail",
+    });
+  }
+
+  if (
+    imageCount !== undefined ||
+    scriptCount !== undefined ||
+    stylesheetCount !== undefined
+  ) {
+    metrics.push({
+      label: "Assets",
+      value: `${imageCount ?? 0} img / ${scriptCount ?? 0} JS / ${stylesheetCount ?? 0} CSS`,
+      detail: "Visible source count",
+    });
+  }
+
+  if (pageTitle) {
+    metrics.push({
+      label: "Page Title",
+      value: pageTitle,
+    });
+  }
+
+  return metrics.slice(0, 10);
+}
+
+function getLighthouseScore(findings: ReportFinding[], title: string) {
+  const evidence = findings.find((finding) => finding.title === title)?.evidence;
+
+  return getNumberFromEvidence(evidence, "score");
+}
+
+function getLighthouseDisplayValue(findings: ReportFinding[], auditId: string) {
+  const evidence = findings.find((finding) => {
+    if (!isRecord(finding.evidence)) {
+      return false;
+    }
+
+    return finding.evidence.auditId === auditId;
+  })?.evidence;
+
+  return getStringFromEvidence(evidence, "displayValue");
+}
+
 function getPlatformCard(
   title: string,
   value: unknown,
@@ -1278,6 +1591,24 @@ function formatDate(date: Date) {
     day: "numeric",
     year: "numeric",
   }).format(date);
+}
+
+function getNumberFromEvidence(evidence: unknown, key: string) {
+  if (!isRecord(evidence)) {
+    return undefined;
+  }
+
+  return typeof evidence[key] === "number" ? evidence[key] : undefined;
+}
+
+function formatMilliseconds(milliseconds: number) {
+  return milliseconds >= 1000
+    ? `${(milliseconds / 1000).toFixed(1)}s`
+    : `${Math.round(milliseconds)}ms`;
+}
+
+function shortUrl(value: string) {
+  return value.length > 58 ? `${value.slice(0, 55)}...` : value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
